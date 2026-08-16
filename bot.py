@@ -96,15 +96,58 @@ def args(message):
     return parts[1].strip() if len(parts) > 1 else ""
 
 
+async def remember_user(message: Message):
+    """Cache users seen in this group for @username targeting."""
+    u = message.from_user
+    if not u or u.is_bot or message.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
+        return
+    await users.update_one(
+        {"chat_id": message.chat.id, "user_id": u.id},
+        {"$set": {
+            "username": (u.username or "").lower(),
+            "first_name": u.first_name or "",
+            "last_name": u.last_name or "",
+            "updated_at": time.time(),
+        }, "$setOnInsert": {"free": False, "approved": False}},
+        upsert=True,
+    )
+
+
 async def target(message):
+    # Replying to a user always takes priority.
     if message.reply_to_message and message.reply_to_message.from_user:
         return message.reply_to_message.from_user
-    a = args(message)
+
+    a = args(message).strip()
+
+    # Telegram text-mention entities contain the actual User object.
+    for ent in (message.entities or []):
+        if ent.type == "text_mention" and ent.user:
+            return ent.user
+
+    # Numeric Telegram user ID.
     if a.isdigit():
         try:
             return (await bot.get_chat_member(message.chat.id, int(a))).user
         except Exception:
             return None
+
+    # @username / username: resolve from users previously seen in this group.
+    username = a.split()[0].lstrip("@").lower() if a else ""
+    if username:
+        row = await users.find_one({"chat_id": message.chat.id, "username": username})
+        if row:
+            try:
+                return (await bot.get_chat_member(message.chat.id, int(row["user_id"]))).user
+            except Exception:
+                # Cached fallback still gives us an ID for moderation commands.
+                class CachedUser:
+                    pass
+                u = CachedUser()
+                u.id = int(row["user_id"])
+                u.username = row.get("username")
+                u.full_name = (row.get("first_name") or "") + ((" " + row.get("last_name")) if row.get("last_name") else "")
+                return u
     return None
 
 
@@ -827,6 +870,8 @@ async def moderation_and_count(message: Message):
         return
     if not message.from_user or message.from_user.is_bot:
         return
+
+    await remember_user(message)
 
     # Commands are never processed by the generic moderation pipeline.
     # This prevents /rank, /help, /ban, etc. from accidentally triggering
