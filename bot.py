@@ -238,6 +238,27 @@ async def back(call: CallbackQuery):
     await call.answer()
 
 
+@router.callback_query(lambda c: c.data == "h:lock")
+async def lock_help_button(call: CallbackQuery):
+    # Send a fresh message instead of editing the start photo caption.
+    # This avoids Telegram caption-edit failures and makes the Lock button reliable.
+    text = (
+        "<b>🔒 𝐋ᴏᴄᴋs & 𝐔ɴʟᴏᴄᴋs</b>\n\n"
+        "/lock sticker\n/lock gif\n/lock emoji\n/lock photo\n/lock video\n/lock link\n\n"
+        "/unlock sticker\n/unlock gif\n/unlock emoji\n/unlock photo\n/unlock video\n/unlock link\n\n"
+        "/approve <reply/user_id> — allow locked media\n"
+        "/free <reply/user_id> — allow everything except links"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅️ 𝐁ᴀᴄᴋ", callback_data="back")]
+    ])
+    await call.answer()
+    try:
+        await call.message.answer(text, reply_markup=kb)
+    except Exception as e:
+        print("Lock help send failed:", e)
+
+
 @router.callback_query(F.data.startswith("h:"))
 async def category(call: CallbackQuery):
     cat = call.data[2:]
