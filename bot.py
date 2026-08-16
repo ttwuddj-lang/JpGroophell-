@@ -135,16 +135,10 @@ async def delete_safe(message):
 
 
 async def notify_admins(message: Message, reason: str):
-    """Notify current group admins when an automatic moderation deletion happens.
-    No ban is performed by this helper.
-    """
+    """Notify current group admins for automatic moderation events."""
     try:
         admins = await bot.get_chat_administrators(message.chat.id)
-        tags = []
-        for member in admins:
-            if member.user.is_bot:
-                continue
-            tags.append(mention(member.user))
+        tags = [mention(m.user) for m in admins if not m.user.is_bot]
         if not tags:
             return
         who = mention(message.from_user) if message.from_user else "User"
@@ -156,6 +150,26 @@ async def notify_admins(message: Message, reason: str):
         )
     except Exception as e:
         print("Admin notification error:", e)
+
+
+async def report_admins(message: Message, title: str = "📣 𝐀ᴅᴍɪɴ 𝐑ᴇᴘᴏʀᴛ"):
+    """Send an explicit report to all current human group admins."""
+    try:
+        admins = await bot.get_chat_administrators(message.chat.id)
+        tags = [mention(m.user) for m in admins if not m.user.is_bot]
+        if not tags:
+            return
+        who = mention(message.from_user) if message.from_user else "User"
+        body = (
+            f"{title}\n"
+            f"👤 <b>𝐅ʀᴏᴍ:</b> {who}\n"
+            f"🆔 <b>𝐈ᴅ:</b> <code>{message.from_user.id if message.from_user else 0}</code>\n"
+            f"💬 <b>𝐑ᴇǫᴜᴇsᴛ:</b> {html.escape(message.text or message.caption or '')}\n\n"
+            + "👮 <b>𝐀ᴅᴍɪɴs:</b> " + " ".join(tags)
+        )
+        await message.answer(body)
+    except Exception as e:
+        print("Admin report error:", e)
 
 async def delete_and_alert(message: Message, reason: str):
     """Delete a violating message and notify admins; never bans the sender."""
@@ -234,9 +248,26 @@ async def help_cmd(message: Message):
     await message.answer("<b>𝐆ʀᴏᴜᴘ 𝐇ᴇʟᴘ 𝐌ᴇɴᴜ</b>\n\nChoose a category.", reply_markup=HELP_KB)
 
 
+async def _show_help_message(call: CallbackQuery, text: str, markup):
+    """Show help content safely for both photo/caption messages and normal messages."""
+    try:
+        if call.message and call.message.photo:
+            await call.message.edit_caption(caption=text, reply_markup=markup)
+        else:
+            await call.message.edit_text(text, reply_markup=markup)
+        return
+    except Exception as e:
+        # A fresh message is a reliable fallback when the original /start message is a photo.
+        print("Help menu edit failed, sending fresh message:", e)
+        try:
+            await call.message.answer(text, reply_markup=markup)
+        except Exception as e2:
+            print("Help menu fallback failed:", e2)
+
+
 @router.callback_query(F.data == "back")
 async def back(call: CallbackQuery):
-    await call.message.edit_text("<b>𝐆ʀᴏᴜᴘ 𝐇ᴇʟᴘ 𝐌ᴇɴᴜ</b>\n\nChoose a category.", reply_markup=HELP_KB)
+    await _show_help_message(call, "<b>𝐆ʀᴏᴜᴘ 𝐇ᴇʟᴘ 𝐌ᴇɴᴜ</b>\n\nChoose a category.", HELP_KB)
     await call.answer()
 
 
@@ -256,7 +287,7 @@ async def category(call: CallbackQuery):
         "broadcast": "<b>📢 𝐁ʀᴏᴀᴅᴄᴀsᴛ</b>\nOnly the bot owner can use /broadcast.\nUse /broadcast text or reply to a message with /broadcast."
     }
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ 𝐁ᴀᴄᴋ", callback_data="back")]])
-    await call.message.edit_text(data.get(cat, "Unknown"), reply_markup=kb)
+    await _show_help_message(call, data.get(cat, "Unknown"), kb)
     await call.answer()
 
 
@@ -756,11 +787,14 @@ async def welcome_member(message: Message):
 
 @router.chat_member()
 async def member_status_update(update: ChatMemberUpdated):
+    """Welcome on the membership update itself; no visible join service message is required."""
     if update.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
         return
     old = update.old_chat_member.status
     new = update.new_chat_member.status
-    joined = new in (ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR) and old in (ChatMemberStatus.LEFT, ChatMemberStatus.KICKED)
+    active = {ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR, ChatMemberStatus.RESTRICTED}
+    inactive = {ChatMemberStatus.LEFT, ChatMemberStatus.KICKED}
+    joined = new in active and old in inactive
     if not joined:
         return
     await send_welcome_for_user(update.chat.id, update.new_chat_member.user, update.chat.title)
@@ -853,6 +887,11 @@ async def moderation_and_count(message: Message):
         upsert=True
     )
 
+    # @admins is an explicit report request. It does not ban or delete the user's message.
+    report_text = (message.text or message.caption or "")
+    if re.search(r"(?<!\w)@admins\b", report_text, re.IGNORECASE):
+        await report_admins(message)
+
     # Commands are never processed by the generic moderation pipeline.
     # This prevents /rank, /help, /ban, etc. from accidentally triggering
     # ban-word/NSFW/lock/FedBan logic.
@@ -920,14 +959,19 @@ async def moderation_and_count(message: Message):
 
     # NSFW moderation.
     if await check_nsfw(message, bool(g.get("nsfw", False))):
-        await delete_and_alert(message, "🔞 𝐍sғᴡ 𝐂ᴏɴᴛᴇɴᴛ")
+        # Stickers are silently removed; other NSFW content still gets an admin alert.
+        if message.sticker:
+            await delete_safe(message)
+        else:
+            await delete_and_alert(message, "🔞 𝐍sғᴡ 𝐂ᴏɴᴛᴇɴᴛ")
         return
 
     # Locks.
     lrows = await locks.find({"chat_id": message.chat.id, "enabled": True}).to_list(20)
     locked = {x["kind"] for x in lrows}
     if "sticker" in locked and message.sticker:
-        await delete_and_alert(message, "🔒 𝐒ᴛɪᴄᴋᴇʀ 𝐋ᴏᴄᴋ"); return
+        # Sticker locks delete silently; do not tag all admins.
+        await delete_safe(message); return
     if "gif" in locked and message.animation:
         await delete_and_alert(message, "🔒 𝐆ɪғ 𝐋ᴏᴄᴋ"); return
     if "photo" in locked and message.photo:
