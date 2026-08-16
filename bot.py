@@ -216,12 +216,21 @@ async def help_cmd(message: Message):
 
 
 async def edit_help_message(call: CallbackQuery, text: str, markup):
-    # /start can display the help menu on a photo. Telegram requires
-    # edit_caption() for photo messages and edit_text() for text messages.
-    if call.message and call.message.photo:
-        await call.message.edit_caption(caption=text, reply_markup=markup)
-    else:
-        await call.message.edit_text(text, reply_markup=markup)
+    # Works for both photo-caption and normal text help messages.
+    # If Telegram refuses an edit (e.g. missing/unchanged caption), send a fresh help page.
+    if not call.message:
+        return
+    try:
+        if call.message.photo:
+            await call.message.edit_caption(caption=text, reply_markup=markup)
+        else:
+            await call.message.edit_text(text, reply_markup=markup)
+    except Exception as e:
+        print(f"Help menu edit failed: {e}")
+        try:
+            await call.message.answer(text, reply_markup=markup)
+        except Exception as e2:
+            print(f"Help menu fallback failed: {e2}")
 
 @router.callback_query(F.data == "back")
 async def back(call: CallbackQuery):
@@ -241,11 +250,11 @@ async def category(call: CallbackQuery):
         "purge": "<b>🧹 𝐏ᴜʀɢᴇ</b>\nReply to the first message with /purge.",
         "rank": "<b>🏆 𝐑ᴀɴᴋɪɴɢ</b>\n/rank today\n/rank week\n/rank overall\n5 messages in 1 second = 10-minute ranking block.",
         "config": "<b>⚙️ 𝐂ᴏɴғɪɢ</b>\n/config",
-        "broadcast": "<b>📢 𝐁ʀᴏᴀᴅᴄᴀsᴛ</b>\nOnly the bot owner can use /broadcast.\nUse /broadcast text or reply to a message with /broadcast.\n\n<b>🏷️ 𝐓ᴀɢᴀʟʟ</b>\n/tagall your text\nAdmin/owner only; 5 users per message."
+        "broadcast": "<b>📢 𝐁ʀᴏᴀᴅᴄᴀsᴛ</b>\nOnly the bot owner can use /broadcast.\nUse /broadcast text or reply to a message with /broadcast."
     }
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ 𝐁ᴀᴄᴋ", callback_data="back")]])
-    await edit_help_message(call, data.get(cat, "Unknown"), kb)
     await call.answer()
+    await edit_help_message(call, data.get(cat, "Unknown"), kb)
 
 
 @router.message(Command("config"))
@@ -759,68 +768,6 @@ async def welcome_member(message: Message):
                 await message.answer(caption)
             except Exception:
                 pass
-
-
-@router.message(Command("tagall"))
-async def tagall(message: Message):
-    """Tag known group members in batches of 5. Admin/owner only."""
-    if message.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
-        return
-    if not message.from_user or not await is_admin(message):
-        return await message.answer("❌ <b>𝐎ɴʟʏ 𝐀ᴅᴍɪɴs 𝐂ᴀɴ 𝐔sᴇ 𝐓ᴀɢᴀʟʟ.</b>")
-
-    intro = args(message)
-    if not intro and message.reply_to_message and message.reply_to_message.text:
-        intro = message.reply_to_message.text
-    intro = intro or "👋 𝐇ᴇʏ ᴇᴠᴇʀʏᴏɴᴇ"
-
-    # Telegram does not expose an API to enumerate every member of a group.
-    # Use members the bot has observed/stored (ranking + approvals + welcomes).
-    ids = set()
-    try:
-        cursor = chat_counts.find({"chat_id": message.chat.id}, {"user_id": 1})
-        async for row in cursor:
-            if row.get("user_id"):
-                ids.add(int(row["user_id"]))
-    except Exception:
-        pass
-    try:
-        cursor = users.find({"chat_id": message.chat.id}, {"user_id": 1})
-        async for row in cursor:
-            if row.get("user_id"):
-                ids.add(int(row["user_id"]))
-    except Exception:
-        pass
-
-    # Remove the command author and bots where possible.
-    ids.discard(message.from_user.id)
-    members = []
-    for uid in ids:
-        try:
-            cm = await bot.get_chat_member(message.chat.id, uid)
-            if cm.user.is_bot or cm.status in ("left", "kicked"):
-                continue
-            members.append(cm.user)
-        except Exception:
-            continue
-
-    if not members:
-        return await message.answer(
-            "⚠️ <b>𝐍ᴏ 𝐊ɴᴏᴡɴ 𝐌ᴇᴍʙᴇʀs.</b>\n"
-            "𝐓ʜᴇ 𝐁ᴏᴛ ᴄᴀɴ ᴛᴀɢ ᴜsᴇʀs ᴏɴʟʏ ᴀғᴛᴇʀ ɪᴛ ʜᴀs sᴇᴇɴ/ᴘʀᴏᴄᴇssᴇᴅ ᴛʜᴇᴍ."
-        )
-
-    # Stable order, five users per message, with the requested emoji set.
-    emojis = "🥰🎀🥹👀🤍"
-    for start in range(0, len(members), 5):
-        batch = members[start:start + 5]
-        mentions = " ".join(mention(u) for u in batch)
-        text = f"{html.escape(intro)}\n{emojis}\n{mentions}"
-        try:
-            await message.answer(text)
-        except Exception as e:
-            print("Tagall send error:", e)
-        await asyncio.sleep(0.7)
 
 
 @router.message(Command("broadcast"))
