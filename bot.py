@@ -152,7 +152,7 @@ async def delete_and_alert(message: Message, reason: str):
 
 
 HELP_KB = InlineKeyboardMarkup(inline_keyboard=[
-    [InlineKeyboardButton(text="🛡️ 𝐌ᴏᴅᴇʀᴀᴛɪᴏɴ", callback_data="h:mod"), InlineKeyboardButton(text="🔒 𝐋ᴏᴄᴋs", callback_data="h:lock")],
+    [InlineKeyboardButton(text="🛡️ 𝐌ᴏᴅᴇʀᴀᴛɪᴏɴ", callback_data="h:mod"), InlineKeyboardButton(text="🔒 𝐋ᴏᴄᴋs", callback_data="help_locks")],
     [InlineKeyboardButton(text="🔞 𝐍sғᴡ", callback_data="h:nsfw"), InlineKeyboardButton(text="🏷️ 𝐅ɪʟᴛᴇʀs", callback_data="h:filter")],
     [InlineKeyboardButton(text="👋 𝐖ᴇʟᴄᴏᴍᴇ", callback_data="h:welcome"), InlineKeyboardButton(text="🧹 𝐏ᴜʀɢᴇ", callback_data="h:purge")],
     [InlineKeyboardButton(text="🏆 𝐑ᴀɴᴋɪɴɢ", callback_data="h:rank"), InlineKeyboardButton(text="⚙️ 𝐂ᴏɴғɪɢ", callback_data="h:config")],
@@ -238,7 +238,7 @@ async def back(call: CallbackQuery):
     await call.answer()
 
 
-@router.callback_query(lambda c: c.data == "h:lock")
+@router.callback_query(F.data == "help_locks")
 async def lock_help_button(call: CallbackQuery):
     # Send a fresh message instead of editing the start photo caption.
     # This avoids Telegram caption-edit failures and makes the Lock button reliable.
@@ -246,8 +246,8 @@ async def lock_help_button(call: CallbackQuery):
         "<b>🔒 𝐋ᴏᴄᴋs & 𝐔ɴʟᴏᴄᴋs</b>\n\n"
         "/lock sticker\n/lock gif\n/lock emoji\n/lock photo\n/lock video\n/lock link\n\n"
         "/unlock sticker\n/unlock gif\n/unlock emoji\n/unlock photo\n/unlock video\n/unlock link\n\n"
-        "/approve <reply/user_id> — allow locked media\n"
-        "/free <reply/user_id> — allow everything except links"
+        "/approve &lt;reply/user_id&gt; — allow locked media\n"
+        "/free &lt;reply/user_id&gt; — allow everything except links"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⬅️ 𝐁ᴀᴄᴋ", callback_data="back")]
@@ -259,12 +259,18 @@ async def lock_help_button(call: CallbackQuery):
         print("Lock help send failed:", e)
 
 
+@router.callback_query(F.data == "h:lock")
+async def old_lock_help_button(call: CallbackQuery):
+    """Compatibility handler for older /start messages that still use h:lock."""
+    await lock_help_button(call)
+
+
 @router.callback_query(F.data.startswith("h:"))
 async def category(call: CallbackQuery):
     cat = call.data[2:]
     data = {
         "mod": "<b>🛡️ 𝐌ᴏᴅᴇʀᴀᴛɪᴏɴ</b>\n/ban /unban /mute /unmute /kick /warn /warnings /dmute /dban /fedban",
-        "lock": "<b>🔒 𝐋ᴏᴄᴋs</b>\n/lock sticker|gif|emoji|photo|video|link\n/unlock sticker|gif|emoji|photo|video|link  (unlock type)\n/free <reply/user_id>  (free user; everything except links)\n/approve <reply/user_id>  (approve user for locked media)",
+        "lock": "<b>🔒 𝐋ᴏᴄᴋs</b>\n/lock sticker|gif|emoji|photo|video|link\n/unlock sticker|gif|emoji|photo|video|link  (unlock type)\n/free &lt;reply/user_id&gt;  (free user; everything except links)\n/approve &lt;reply/user_id&gt;  (approve user for locked media)",
         "nsfw": "<b>🔞 𝐍sғᴡ</b>\n/nsfw on\n/nsfw off\n🛡️ 𝐀ᴜᴛᴏ 𝐌ᴏᴅᴇʀᴀᴛɪᴏɴ: explicit content is removed and admins are alerted.",
         "filter": "<b>🏷️ 𝐅ɪʟᴛᴇʀs</b>\n/filter word → then send the reply media/text\n/filters /stopfilter word /clearfilters",
         "welcome": "<b>👋 𝐖ᴇʟᴄᴏᴍᴇ</b>\n/setwelcome text (or reply to photo)\n/welcome on|off\n{name} {username} {mention} {id} {group} {count} {first} {last}",
