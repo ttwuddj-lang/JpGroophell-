@@ -11,7 +11,7 @@ from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ChatMemberStatus, ChatType, ParseMode
 from aiogram.filters import Command, CommandStart
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from motor.motor_asyncio import AsyncIOMotorClient
 from PIL import Image, ImageDraw, ImageFont
 
@@ -19,7 +19,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 OWNER_ID = int(os.getenv("OWNER_ID", "0") or 0)
 MONGO_URI = os.getenv("MONGO_URI", "")
 MONGO_DB = os.getenv("MONGO_DB", "group_help_bot")
-START_PHOTO = os.getenv("START_PHOTO", "")
+START_PHOTO = os.getenv("START_PHOTO", "")  # Telegram file_id OR direct HTTP(S) image URL
 SUPPORT_URL = os.getenv("SUPPORT_URL", "https://t.me/")
 OWNER_URL = os.getenv("OWNER_URL", "https://t.me/")
 CHANNEL_URL = os.getenv("CHANNEL_URL", "https://t.me/")
@@ -106,17 +106,43 @@ HELP_KB = InlineKeyboardMarkup(inline_keyboard=[
      InlineKeyboardButton(text="📢 𝐂ʜᴀɴɴᴇʟ", url=CHANNEL_URL)]
 ])
 
+async def send_start_photo(message: Message, caption: str):
+    """Accept a Telegram file_id OR a direct HTTP(S) image URL."""
+    if not START_PHOTO:
+        return False
+    try:
+        if START_PHOTO.startswith(("http://", "https://")):
+            import aiohttp
+            timeout = aiohttp.ClientTimeout(total=20)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(START_PHOTO, allow_redirects=True) as r:
+                    if r.status != 200:
+                        return False
+                    data = await r.read()
+                    if not data:
+                        return False
+                    content_type = (r.headers.get("Content-Type") or "").lower()
+                    if not content_type.startswith("image/"):
+                        return False
+                    await message.answer_photo(
+                        BufferedInputFile(data, filename="start.jpg"),
+                        caption=caption,
+                        reply_markup=HELP_KB
+                    )
+                    return True
+        await message.answer_photo(START_PHOTO, caption=caption, reply_markup=HELP_KB)
+        return True
+    except Exception as e:
+        print(f"START_PHOTO error: {e}")
+        return False
+
 @router.message(CommandStart())
 async def start(message: Message):
     text = ("<b>𝐖ᴇʟᴄᴏᴍᴇ 𝐓ᴏ 𝐆ʀᴏᴜᴘ 𝐇ᴇʟᴘ</b>\n\n"
             "🛡️ 𝐆ʀᴏᴜᴘ 𝐌ᴏᴅᴇʀᴀᴛɪᴏɴ\n🔒 𝐋ᴏᴄᴋs & 𝐅ɪʟᴛᴇʀs\n"
             "🏆 𝐂ʜᴀᴛ 𝐑ᴀɴᴋɪɴɢ\n\nUse /help to open the menu.")
-    if START_PHOTO:
-        try:
-            await message.answer_photo(START_PHOTO, caption=text, reply_markup=HELP_KB)
-            return
-        except Exception:
-            pass
+    if await send_start_photo(message, text):
+        return
     await message.answer(text, reply_markup=HELP_KB)
 
 @router.message(Command("help"))
