@@ -82,15 +82,37 @@ async def is_admin_for_chat(chat_id: int, uid: int) -> bool:
         return False
 
 
+async def get_member(message: Message, uid=None):
+    uid = uid or (message.from_user.id if message.from_user else 0)
+    try:
+        return await bot.get_chat_member(message.chat.id, uid)
+    except Exception:
+        return None
+
+
 async def is_admin(message: Message, uid=None):
     uid = uid or (message.from_user.id if message.from_user else 0)
     if uid == OWNER_ID:
         return True
-    try:
-        m = await bot.get_chat_member(message.chat.id, uid)
-        return m.status in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR)
-    except Exception:
+    m = await get_member(message, uid)
+    return bool(m and m.status in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR))
+
+
+async def can_restrict_members(message: Message):
+    uid = message.from_user.id if message.from_user else 0
+    if uid == OWNER_ID:
+        return True
+    m = await get_member(message, uid)
+    if not m:
         return False
+    if m.status == ChatMemberStatus.CREATOR:
+        return True
+    return bool(m.status == ChatMemberStatus.ADMINISTRATOR and getattr(m, "can_restrict_members", False))
+
+
+async def target_is_admin(message: Message, user_id: int) -> bool:
+    m = await get_member(message, user_id)
+    return bool(m and m.status in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR))
 
 
 async def exempt(chat_id, uid):
@@ -483,6 +505,8 @@ async def free(message: Message):
     if not await is_admin(message): return
     t = await target(message)
     if t:
+        if await target_is_admin(message, t.id):
+            return await message.answer("ℹ️ <b>𝐀ᴅᴍɪɴs ᴀʀᴇ ᴀʟʀᴇᴀᴅʏ 𝐄xᴇᴍᴘᴛ</b>")
         await users.update_one({"chat_id": message.chat.id, "user_id": t.id}, {"$set": {"free": True}}, upsert=True)
         return await message.answer(f"🆓 <b>𝐅ʀᴇᴇ 𝐔sᴇʀ</b>: {mention(t)}")
     kind = args(message).lower().strip()
@@ -498,14 +522,20 @@ async def unfree(message: Message):
     if not await is_admin(message): return
     t = await target(message)
     if t:
+        if await target_is_admin(message, t.id):
+            return await message.answer("ℹ️ <b>𝐀ᴅᴍɪɴs ᴀʀᴇ ᴀʟʀᴇᴀᴅʏ 𝐄xᴇᴍᴘᴛ</b>")
         await users.update_one({"chat_id": message.chat.id, "user_id": t.id}, {"$set": {"free": False}}, upsert=True)
         await message.answer("✅ <b>𝐅ʀᴇᴇ 𝐒ᴛᴀᴛᴜs 𝐑ᴇᴍᴏᴠᴇᴅ</b>")
 
 
 async def restrict(message, action):
     if not await is_admin(message): return
+    if action in {"ban", "unban", "mute", "unmute", "kick"} and not await can_restrict_members(message):
+        return await message.answer("❌ <b>𝐘ᴏᴜ ᴅᴏɴ'ᴛ ʜᴀᴠᴇ 𝐁ᴀɴ/𝐌ᴜᴛᴇ 𝐏ᴇʀᴍɪssɪᴏɴ</b>")
     t = await target(message)
-    if not t: return await message.answer("❌ <b>𝐑ᴇᴘʟʏ ᴛᴏ ᴀ ᴜsᴇʀ</b>")
+    if not t: return await message.answer("❌ <b>𝐑ᴇᴘʟʏ ᴛᴏ ᴀ ᴜsᴇʀ ᴏʀ ᴜsᴇ ᴀ ᴜsᴇʀ_ɪᴅ/username</b>")
+    if await target_is_admin(message, t.id):
+        return await message.answer("❌ <b>𝐀ᴅᴍɪɴs ᴄᴀɴɴᴏᴛ ʙᴇ 𝐌ᴜᴛᴇᴅ/𝐁ᴀɴɴᴇᴅ ʙʏ ᴛʜɪs ᴄᴏᴍᴍᴀɴᴅ</b>")
     try:
         if action == "ban": await bot.ban_chat_member(message.chat.id, t.id)
         elif action == "unban": await bot.unban_chat_member(message.chat.id, t.id, only_if_banned=True)
@@ -552,6 +582,8 @@ async def approve(message: Message):
     if not await is_admin(message): return
     t = await target(message)
     if t:
+        if await target_is_admin(message, t.id):
+            return await message.answer("ℹ️ <b>𝐀ᴅᴍɪɴs ᴀʀᴇ ᴀʟʀᴇᴀᴅʏ 𝐀ᴘᴘʀᴏᴠᴇᴅ</b>")
         await users.update_one({"chat_id": message.chat.id, "user_id": t.id}, {"$set": {"approved": True}}, upsert=True)
         await message.answer("✅ <b>𝐔sᴇʀ 𝐀ᴘᴘʀᴏᴠᴇᴅ</b>")
 
@@ -561,6 +593,8 @@ async def unapprove(message: Message):
     if not await is_admin(message): return
     t = await target(message)
     if t:
+        if await target_is_admin(message, t.id):
+            return await message.answer("ℹ️ <b>𝐀ᴅᴍɪɴs ᴀʀᴇ ᴀʟʀᴇᴀᴅʏ 𝐄xᴇᴍᴘᴛ</b>")
         await users.update_one({"chat_id": message.chat.id, "user_id": t.id}, {"$set": {"approved": False}}, upsert=True)
     await message.answer("✅ <b>𝐀ᴘᴘʀᴏᴠᴀʟ 𝐑ᴇᴍᴏᴠᴇᴅ</b>")
 
@@ -787,17 +821,28 @@ async def welcome_member(message: Message):
 
 @router.chat_member()
 async def member_status_update(update: ChatMemberUpdated):
-    """Welcome on the membership update itself; no visible join service message is required."""
+    """Welcome from Telegram's membership update, not the visible service message."""
     if update.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
         return
+
     old = update.old_chat_member.status
     new = update.new_chat_member.status
-    active = {ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR, ChatMemberStatus.RESTRICTED}
     inactive = {ChatMemberStatus.LEFT, ChatMemberStatus.KICKED}
-    joined = new in active and old in inactive
-    if not joined:
-        return
-    await send_welcome_for_user(update.chat.id, update.new_chat_member.user, update.chat.title)
+    active = {
+        ChatMemberStatus.MEMBER,
+        ChatMemberStatus.ADMINISTRATOR,
+        ChatMemberStatus.CREATOR,
+        ChatMemberStatus.RESTRICTED,
+    }
+
+    # A genuine join is a transition from a non-member state to a member state.
+    # This also catches users accepted from a join request.
+    if old in inactive and new in active:
+        await send_welcome_for_user(
+            update.chat.id,
+            update.new_chat_member.user,
+            update.chat.title
+        )
 
 
 @router.chat_join_request()
@@ -1094,6 +1139,9 @@ async def rank(message: Message):
 
 
 async def main():
+    # Explicitly request membership updates. This makes welcome independent of
+    # Telegram's visible "joined via invite link" service message.
+    await bot.delete_webhook(drop_pending_updates=False)
     await groups.create_index("chat_id", unique=True)
     await locks.create_index([("chat_id", 1), ("kind", 1)], unique=True)
     await filters.create_index([("chat_id", 1), ("word", 1)], unique=True)
@@ -1104,7 +1152,12 @@ async def main():
     await chat_counts.create_index([("chat_id", 1), ("user_id", 1), ("period", 1), ("period_key", 1)], unique=True)
     await fedbans.create_index("user_id", unique=True)
     print("MongoDB Group Help Bot started")
-    await dp.start_polling(bot)
+    # Do not rely on Telegram service messages. Receive chat_member updates
+    # directly so welcome works in both small and large groups.
+    await dp.start_polling(
+        bot,
+        allowed_updates=["message", "callback_query", "chat_member", "chat_join_request", "my_chat_member"]
+    )
 
 
 if __name__ == "__main__":
