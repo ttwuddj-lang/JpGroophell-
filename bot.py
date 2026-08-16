@@ -82,7 +82,7 @@ async def is_admin(message: Message, uid=None):
         return False
 
 
-async def exempt(chat_id, uid):
+async def user_exempt(chat_id, uid):
     x = await users.find_one({"chat_id": chat_id, "user_id": uid})
     return bool(x and (x.get("free") or x.get("approved")))
 
@@ -215,9 +215,17 @@ async def help_cmd(message: Message):
     await message.answer("<b>𝐆ʀᴏᴜᴘ 𝐇ᴇʟᴘ 𝐌ᴇɴᴜ</b>\n\nChoose a category.", reply_markup=HELP_KB)
 
 
+async def edit_help_message(call: CallbackQuery, text: str, markup):
+    # /start can display the help menu on a photo. Telegram requires
+    # edit_caption() for photo messages and edit_text() for text messages.
+    if call.message and call.message.photo:
+        await call.message.edit_caption(caption=text, reply_markup=markup)
+    else:
+        await call.message.edit_text(text, reply_markup=markup)
+
 @router.callback_query(F.data == "back")
 async def back(call: CallbackQuery):
-    await call.message.edit_text("<b>𝐆ʀᴏᴜᴘ 𝐇ᴇʟᴘ 𝐌ᴇɴᴜ</b>\n\nChoose a category.", reply_markup=HELP_KB)
+    await edit_help_message(call, "<b>𝐆ʀᴏᴜᴘ 𝐇ᴇʟᴘ 𝐌ᴇɴᴜ</b>\n\nChoose a category.", HELP_KB)
     await call.answer()
 
 
@@ -226,17 +234,17 @@ async def category(call: CallbackQuery):
     cat = call.data[2:]
     data = {
         "mod": "<b>🛡️ 𝐌ᴏᴅᴇʀᴀᴛɪᴏɴ</b>\n/ban /unban /mute /unmute /kick /warn /warnings /dmute /dban /fedban",
-        "lock": "<b>🔒 𝐋ᴏᴄᴋs</b>\n/lock sticker|gif|emoji|photo|video|link\n/free sticker|gif|emoji|photo|video|link",
-        "nsfw": "<b>🔞 𝐍sғᴡ</b>\n/nsfw on|off\nRequires SIGHTENGINE_API_USER + SIGHTENGINE_API_SECRET.",
+        "lock": "<b>🔒 𝐋ᴏᴄᴋs</b>\n/lock sticker|gif|emoji|photo|video|link\n/unlock sticker|gif|emoji|photo|video|link  (unlock type)\n/free <reply/user_id>  (free user; everything except links)\n/approve <reply/user_id>  (approve user for locked media)",
+        "nsfw": "<b>🔞 𝐍sғᴡ</b>\n/nsfw on\n/nsfw off\n🛡️ 𝐀ᴜᴛᴏ 𝐌ᴏᴅᴇʀᴀᴛɪᴏɴ: explicit content is removed and admins are alerted.",
         "filter": "<b>🏷️ 𝐅ɪʟᴛᴇʀs</b>\n/filter word → then send the reply media/text\n/filters /stopfilter word /clearfilters",
         "welcome": "<b>👋 𝐖ᴇʟᴄᴏᴍᴇ</b>\n/setwelcome text (or reply to photo)\n/welcome on|off\n{name} {username} {mention} {id} {group} {count} {first} {last}",
         "purge": "<b>🧹 𝐏ᴜʀɢᴇ</b>\nReply to the first message with /purge.",
         "rank": "<b>🏆 𝐑ᴀɴᴋɪɴɢ</b>\n/rank today\n/rank week\n/rank overall\n5 messages in 1 second = 10-minute ranking block.",
         "config": "<b>⚙️ 𝐂ᴏɴғɪɢ</b>\n/config",
-        "broadcast": "<b>📢 𝐁ʀᴏᴀᴅᴄᴀsᴛ</b>\nOnly the bot owner can use /broadcast.\nUse /broadcast text or reply to a message with /broadcast."
+        "broadcast": "<b>📢 𝐁ʀᴏᴀᴅᴄᴀsᴛ</b>\nOnly the bot owner can use /broadcast.\nUse /broadcast text or reply to a message with /broadcast.\n\n<b>🏷️ 𝐓ᴀɢᴀʟʟ</b>\n/tagall your text\nAdmin/owner only; 5 users per message."
     }
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ 𝐁ᴀᴄᴋ", callback_data="back")]])
-    await call.message.edit_text(data.get(cat, "Unknown"), reply_markup=kb)
+    await edit_help_message(call, data.get(cat, "Unknown"), kb)
     await call.answer()
 
 
@@ -250,7 +258,7 @@ async def config(message: Message):
             f"✏️ 𝐄ᴅɪᴛ 𝐃ᴇʟᴇᴛᴇ: {bool(g.get('editdelete', False))}\n"
             f"🔞 𝐍sғᴡ: {bool(g.get('nsfw', False))}\n"
             f"🔒 𝐋ᴏᴄᴋs: {', '.join(x['kind'] for x in active_locks) or 'None'}\n"
-            f"🧠 𝐍sғᴡ 𝐀ᴘɪ: {'Configured' if SIGHTENGINE_USER and SIGHTENGINE_SECRET else 'Not configured'}")
+            f"🧠 𝐍sғᴡ 𝐌ᴏᴅᴇ: {"Ready" if SIGHTENGINE_USER and SIGHTENGINE_SECRET else "Off until moderation service is configured"}")
     await message.answer(text)
 
 
@@ -427,6 +435,21 @@ async def lock(message: Message):
     await message.answer(f"🔒 <b>𝐋ᴏᴄᴋᴇᴅ</b>: {html.escape(kind)}")
 
 
+@router.message(Command("unlock"))
+async def unlock(message: Message):
+    if not await is_admin(message):
+        return
+    kind = args(message).lower().strip()
+    if kind not in LOCK_TYPES:
+        return await message.answer("❌ <b>𝐔sᴀɢᴇ</b>: /unlock sticker|gif|emoji|photo|video|link")
+    await locks.update_one(
+        {"chat_id": message.chat.id, "kind": kind},
+        {"$set": {"enabled": False}},
+        upsert=True,
+    )
+    await message.answer(f"🔓 <b>𝐔ɴʟᴏᴄᴋᴇᴅ</b>: {html.escape(kind)}")
+
+
 @router.message(Command("free"))
 async def free(message: Message):
     if not await is_admin(message): return
@@ -500,18 +523,20 @@ async def dban(message: Message):
 async def approve(message: Message):
     if not await is_admin(message): return
     t = await target(message)
-    if t:
-        await users.update_one({"chat_id": message.chat.id, "user_id": t.id}, {"$set": {"approved": True}}, upsert=True)
-        await message.answer("✅ <b>𝐔sᴇʀ 𝐀ᴘᴘʀᴏᴠᴇᴅ</b>")
+    if not t:
+        return await message.answer("❌ <b>𝐑ᴇᴘʟʏ ᴛᴏ ᴛʜᴇ ᴜsᴇʀ ᴏʀ ᴜsᴇ ᴛʜᴇɪʀ ɴᴜᴍᴇʀɪᴄ 𝐈𝐃</b>")
+    await users.update_one({"chat_id": message.chat.id, "user_id": t.id}, {"$set": {"approved": True}}, upsert=True)
+    await message.answer(f"✅ <b>𝐀ᴘᴘʀᴏᴠᴇᴅ</b>\n👤 {mention(t)}\n🆔 <code>{t.id}</code>")
 
 
 @router.message(Command("unapprove"))
 async def unapprove(message: Message):
     if not await is_admin(message): return
     t = await target(message)
-    if t:
-        await users.update_one({"chat_id": message.chat.id, "user_id": t.id}, {"$set": {"approved": False}}, upsert=True)
-    await message.answer("✅ <b>𝐀ᴘᴘʀᴏᴠᴀʟ 𝐑ᴇᴍᴏᴠᴇᴅ</b>")
+    if not t:
+        return await message.answer("❌ <b>𝐑ᴇᴘʟʏ ᴛᴏ ᴛʜᴇ ᴜsᴇʀ ᴏʀ ᴜsᴇ ᴛʜᴇɪʀ ɴᴜᴍᴇʀɪᴄ 𝐈𝐃</b>")
+    await users.update_one({"chat_id": message.chat.id, "user_id": t.id}, {"$set": {"approved": False}}, upsert=True)
+    await message.answer(f"✅ <b>𝐀ᴘᴘʀᴏᴠᴀʟ 𝐑ᴇᴍᴏᴠᴇᴅ</b>\n👤 {mention(t)}")
 
 
 @router.message(Command("purge"))
@@ -736,6 +761,68 @@ async def welcome_member(message: Message):
                 pass
 
 
+@router.message(Command("tagall"))
+async def tagall(message: Message):
+    """Tag known group members in batches of 5. Admin/owner only."""
+    if message.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
+        return
+    if not message.from_user or not await is_admin(message):
+        return await message.answer("❌ <b>𝐎ɴʟʏ 𝐀ᴅᴍɪɴs 𝐂ᴀɴ 𝐔sᴇ 𝐓ᴀɢᴀʟʟ.</b>")
+
+    intro = args(message)
+    if not intro and message.reply_to_message and message.reply_to_message.text:
+        intro = message.reply_to_message.text
+    intro = intro or "👋 𝐇ᴇʏ ᴇᴠᴇʀʏᴏɴᴇ"
+
+    # Telegram does not expose an API to enumerate every member of a group.
+    # Use members the bot has observed/stored (ranking + approvals + welcomes).
+    ids = set()
+    try:
+        cursor = chat_counts.find({"chat_id": message.chat.id}, {"user_id": 1})
+        async for row in cursor:
+            if row.get("user_id"):
+                ids.add(int(row["user_id"]))
+    except Exception:
+        pass
+    try:
+        cursor = users.find({"chat_id": message.chat.id}, {"user_id": 1})
+        async for row in cursor:
+            if row.get("user_id"):
+                ids.add(int(row["user_id"]))
+    except Exception:
+        pass
+
+    # Remove the command author and bots where possible.
+    ids.discard(message.from_user.id)
+    members = []
+    for uid in ids:
+        try:
+            cm = await bot.get_chat_member(message.chat.id, uid)
+            if cm.user.is_bot or cm.status in ("left", "kicked"):
+                continue
+            members.append(cm.user)
+        except Exception:
+            continue
+
+    if not members:
+        return await message.answer(
+            "⚠️ <b>𝐍ᴏ 𝐊ɴᴏᴡɴ 𝐌ᴇᴍʙᴇʀs.</b>\n"
+            "𝐓ʜᴇ 𝐁ᴏᴛ ᴄᴀɴ ᴛᴀɢ ᴜsᴇʀs ᴏɴʟʏ ᴀғᴛᴇʀ ɪᴛ ʜᴀs sᴇᴇɴ/ᴘʀᴏᴄᴇssᴇᴅ ᴛʜᴇᴍ."
+        )
+
+    # Stable order, five users per message, with the requested emoji set.
+    emojis = "🥰🎀🥹👀🤍"
+    for start in range(0, len(members), 5):
+        batch = members[start:start + 5]
+        mentions = " ".join(mention(u) for u in batch)
+        text = f"{html.escape(intro)}\n{emojis}\n{mentions}"
+        try:
+            await message.answer(text)
+        except Exception as e:
+            print("Tagall send error:", e)
+        await asyncio.sleep(0.7)
+
+
 @router.message(Command("broadcast"))
 async def broadcast(message: Message):
     if not message.from_user or not is_owner(message.from_user.id):
@@ -802,11 +889,9 @@ async def moderation_and_count(message: Message):
             )
             return
 
-    if await exempt(message.chat.id, message.from_user.id):
-        return
-
     g = await groups.find_one({"chat_id": message.chat.id}) or {}
     text = (message.text or message.caption or "").lower()
+    is_exempt = await user_exempt(message.chat.id, message.from_user.id)
 
     # Filter trigger: send the saved response and keep the trigger message.
     if text:
@@ -820,32 +905,34 @@ async def moderation_and_count(message: Message):
                     print("Filter response error:", e)
                 break
 
-    # Ban words.
-    brows = await banwords.find({"chat_id": message.chat.id}).to_list(200)
-    if text and any(x.get("word", "") in text for x in brows):
-        await delete_and_alert(message, "𝐁ᴀɴ 𝐖ᴏʀᴅ")
-        return
+    # Ban words: a /free or /approve user may use them.
+    if not is_exempt:
+        brows = await banwords.find({"chat_id": message.chat.id}).to_list(200)
+        if text and any(x.get("word", "") in text for x in brows):
+            await delete_and_alert(message, "𝐁ᴀɴ 𝐖ᴏʀᴅ")
+            return
 
-    # NSFW moderation.
+    # NSFW moderation is always checked, including approved/free users.
     if await check_nsfw(message, bool(g.get("nsfw", False))):
         await delete_and_alert(message, "🔞 𝐍sғᴡ 𝐂ᴏɴᴛᴇɴᴛ")
         return
 
-    # Locks.
+    # Locks: approved/free users bypass every lock EXCEPT link lock.
     lrows = await locks.find({"chat_id": message.chat.id, "enabled": True}).to_list(20)
     locked = {x["kind"] for x in lrows}
-    if "sticker" in locked and message.sticker:
-        await delete_and_alert(message, "🔒 𝐒ᴛɪᴄᴋᴇʀ 𝐋ᴏᴄᴋ"); return
-    if "gif" in locked and message.animation:
-        await delete_and_alert(message, "🔒 𝐆ɪғ 𝐋ᴏᴄᴋ"); return
-    if "photo" in locked and message.photo:
-        await delete_and_alert(message, "🔒 𝐏ʜᴏᴛᴏ 𝐋ᴏᴄᴋ"); return
-    if "video" in locked and message.video:
-        await delete_and_alert(message, "🔒 𝐕ɪᴅᴇᴏ 𝐋ᴏᴄᴋ"); return
     if "link" in locked and re.search(r"(https?://|t\.me/|www\.)", text):
         await delete_and_alert(message, "🔒 𝐋ɪɴᴋ 𝐋ᴏᴄᴋ"); return
-    if "emoji" in locked and text and not re.search(r"[A-Za-z0-9\u0980-\u09ff\u0900-\u097f]", text) and len(text) <= 50:
-        await delete_and_alert(message, "🔒 𝐄ᴍᴏᴊɪ 𝐋ᴏᴄᴋ"); return
+    if not is_exempt:
+        if "sticker" in locked and message.sticker:
+            await delete_and_alert(message, "🔒 𝐒ᴛɪᴄᴋᴇʀ 𝐋ᴏᴄᴋ"); return
+        if "gif" in locked and message.animation:
+            await delete_and_alert(message, "🔒 𝐆ɪғ 𝐋ᴏᴄᴋ"); return
+        if "photo" in locked and message.photo:
+            await delete_and_alert(message, "🔒 𝐏ʜᴏᴛᴏ 𝐋ᴏᴄᴋ"); return
+        if "video" in locked and message.video:
+            await delete_and_alert(message, "🔒 𝐕ɪᴅᴇᴏ 𝐋ᴏᴄᴋ"); return
+        if "emoji" in locked and text and not re.search(r"[A-Za-z0-9\u0980-\u09ff\u0900-\u097f]", text) and len(text) <= 50:
+            await delete_and_alert(message, "🔒 𝐄ᴍᴏᴊɪ 𝐋ᴏᴄᴋ"); return
 
 
 @router.edited_message()
