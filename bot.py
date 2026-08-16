@@ -36,7 +36,7 @@ DEFAULT_WELCOME = (
 # Optional NSFW moderation. Create keys with a moderation provider and set these in Railway.
 SIGHTENGINE_USER = os.getenv("SIGHTENGINE_API_USER", "")
 SIGHTENGINE_SECRET = os.getenv("SIGHTENGINE_API_SECRET", "")
-NSFW_THRESHOLD = float(os.getenv("NSFW_THRESHOLD", "0.80"))
+NSFW_THRESHOLD = float(os.getenv("NSFW_THRESHOLD", "0.85"))
 NSFW_REMOVE_PARTIAL = os.getenv("NSFW_REMOVE_PARTIAL", "false").lower() == "true"
 
 if not BOT_TOKEN:
@@ -773,6 +773,10 @@ async def moderation_and_count(message: Message):
     if message.text and message.text.startswith("/"):
         return
 
+    # Count every non-command group message for ChatFight BEFORE moderation.
+    # Deleted/locked messages do not ban the user, but they can still count as a message.
+    await record_chat(message)
+
     # Automatically initialize every group in MongoDB.
     await groups.update_one(
         {"chat_id": message.chat.id},
@@ -798,17 +802,7 @@ async def moderation_and_count(message: Message):
             )
             return
 
-    # FedBan is enforced only on ordinary user messages, never on commands.
-    if await fedbans.find_one({"user_id": message.from_user.id}):
-        try:
-            await bot.ban_chat_member(message.chat.id, message.from_user.id)
-            await delete_safe(message)
-        except Exception as e:
-            print("FedBan enforcement error:", e)
-        return
-
     if await exempt(message.chat.id, message.from_user.id):
-        await record_chat(message)
         return
 
     g = await groups.find_one({"chat_id": message.chat.id}) or {}
@@ -852,8 +846,6 @@ async def moderation_and_count(message: Message):
         await delete_and_alert(message, "🔒 𝐋ɪɴᴋ 𝐋ᴏᴄᴋ"); return
     if "emoji" in locked and text and not re.search(r"[A-Za-z0-9\u0980-\u09ff\u0900-\u097f]", text) and len(text) <= 50:
         await delete_and_alert(message, "🔒 𝐄ᴍᴏᴊɪ 𝐋ᴏᴄᴋ"); return
-
-    await record_chat(message)
 
 
 @router.edited_message()

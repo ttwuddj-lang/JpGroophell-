@@ -75,3 +75,12 @@ Automatic NSFW, ban-word and lock violations are **delete + admin notification o
 
 ## Edited-message cleanup
 When `/editdelete on` is enabled for a group, an edited user message is automatically deleted after **5 minutes**. The bot then tags the user with a short notification. This action does **not** ban or mute the user.
+
+
+## Ranking / ChatFight
+The bot counts every non-command group message before moderation, so deleted NSFW/locked messages do not cause a ban and ranking data still records the chat message. `/rank today`, `/rank week`, and `/rank overall` show the top 10.
+
+**Important Telegram setting:** To receive ordinary group messages for ChatFight and moderation, open BotFather -> your bot -> Bot Settings -> Group Privacy -> **Turn off**. Then remove/re-add the bot to groups if Telegram asks.
+
+## NSFW behavior
+NSFW moderation uses the explicit `nudity-2.1` raw score. With the default `NSFW_THRESHOLD=0.85` and `NSFW_REMOVE_PARTIAL=false`, ordinary photos are not intentionally treated as NSFW; only high-confidence explicit nudity is removed. NSFW moderation only deletes the message and alerts admins; it does not ban the sender.
