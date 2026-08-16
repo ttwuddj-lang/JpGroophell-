@@ -21,7 +21,7 @@ NSFW_REMOVE_PARTIAL=false
 ```
 
 ### Start photo
-`START_PHOTO` accepts either a Telegram file_id or a direct public HTTP(S) image URL. The URL must return the actual image, not a webpage.
+`START_PHOTO` accepts either a Telegram file_id or a direct public HTTP(S) image URL. The bot accepts a direct image URL or an image-hosting webpage that exposes an og:image preview. Some hosted links can expire, so a permanent direct image URL is preferable.
 
 ### Filters
 1. Admin: `/filter jpexo`
@@ -52,3 +52,26 @@ Only `OWNER_ID` can use `/broadcast text` or reply to a message with `/broadcast
 
 ### NSFW moderation
 `/nsfw on` enables automated media checking for photos, videos, GIF/animations and static stickers. The bot uses the configured moderation API and deletes media when its configured threshold is exceeded. If the API credentials are missing, `/nsfw on` warns that detection is not active.
+
+
+## Welcome system
+
+Welcome is enabled automatically when the bot sees a group/new-member event.
+
+Admins/owner can set custom text:
+`/setwelcome Welcome {mention}`
+
+Supported placeholders:
+`{name}` `{username}` `{mention}` `{id}` `{group}` `{count}` `{first}` `{last}`
+
+For a custom welcome photo, send a photo and reply to it with:
+`/setwelcome Welcome {mention} | ID: {id}`
+
+The new member's Telegram profile photo is used automatically when no custom welcome photo is set.
+
+## Automatic moderation behavior
+Automatic NSFW, ban-word and lock violations are **delete + admin notification only**. They do not ban the sender. Explicit moderation commands such as `/ban`, `/dban`, `/fedban` retain their intended ban behavior.
+
+
+## Edited-message cleanup
+When `/editdelete on` is enabled for a group, an edited user message is automatically deleted after **5 minutes**. The bot then tags the user with a short notification. This action does **not** ban or mute the user.

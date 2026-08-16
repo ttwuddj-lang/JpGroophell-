@@ -20,10 +20,18 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 OWNER_ID = int(os.getenv("OWNER_ID", "0") or 0)
 MONGO_URI = os.getenv("MONGO_URI", "")
 MONGO_DB = os.getenv("MONGO_DB", "group_help_bot")
-START_PHOTO = os.getenv("START_PHOTO", "")
+START_PHOTO = os.getenv("START_PHOTO", "https://kommodo.ai/i/ynjRa4bLTdAC3ddCj3l5")
 SUPPORT_URL = os.getenv("SUPPORT_URL", "https://t.me/")
 OWNER_URL = os.getenv("OWNER_URL", "https://t.me/")
 CHANNEL_URL = os.getenv("CHANNEL_URL", "https://t.me/")
+
+DEFAULT_WELCOME = (
+    "<b>👋 𝐖ᴇʟᴄᴏᴍᴇ {mention}!</b>\n\n"
+    "🆔 𝐈ᴅ: <code>{id}</code>\n"
+    "👤 𝐔sᴇʀɴᴀᴍᴇ: {username}\n"
+    "👥 𝐆ʀᴏᴜᴘ: {group}\n"
+    "👨‍👩‍👧‍👦 𝐌ᴇᴍʙᴇʀs: {count}"
+)
 
 # Optional NSFW moderation. Create keys with a moderation provider and set these in Railway.
 SIGHTENGINE_USER = os.getenv("SIGHTENGINE_API_USER", "")
@@ -107,6 +115,42 @@ async def delete_safe(message):
         pass
 
 
+async def notify_admins(message: Message, reason: str):
+    """Notify current group admins when an automatic moderation deletion happens.
+    No ban is performed by this helper.
+    """
+    try:
+        admins = await bot.get_chat_administrators(message.chat.id)
+        tags = []
+        for member in admins:
+            if member.user.is_bot:
+                continue
+            tags.append(mention(member.user))
+        if not tags:
+            return
+        who = mention(message.from_user) if message.from_user else "User"
+        await message.answer(
+            f"🛡️ <b>𝐌ᴏᴅᴇʀᴀᴛɪᴏɴ 𝐀ʟᴇʀᴛ</b>\n"
+            f"👤 {who}\n"
+            f"⚠️ <b>𝐑ᴇᴀsᴏɴ:</b> {html.escape(reason)}\n\n"
+            f"👮 <b>𝐀ᴅᴍɪɴs:</b> " + " ".join(tags)
+        )
+    except Exception as e:
+        print("Admin notification error:", e)
+
+async def delete_and_alert(message: Message, reason: str):
+    """Delete a violating message and notify admins; never bans the sender."""
+    deleted = False
+    try:
+        await message.delete()
+        deleted = True
+    except Exception as e:
+        print("Delete error:", e)
+    if deleted:
+        await notify_admins(message, reason)
+    return deleted
+
+
 HELP_KB = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="🛡️ 𝐌ᴏᴅᴇʀᴀᴛɪᴏɴ", callback_data="h:mod"), InlineKeyboardButton(text="🔒 𝐋ᴏᴄᴋs", callback_data="h:lock")],
     [InlineKeyboardButton(text="🔞 𝐍sғᴡ", callback_data="h:nsfw"), InlineKeyboardButton(text="🏷️ 𝐅ɪʟᴛᴇʀs", callback_data="h:filter")],
@@ -123,16 +167,34 @@ async def send_start_photo(message: Message, caption: str):
         return False
     try:
         if START_PHOTO.startswith(("http://", "https://")):
-            timeout = aiohttp.ClientTimeout(total=20)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            timeout = aiohttp.ClientTimeout(total=25)
+            headers = {"User-Agent": "Mozilla/5.0"}
+            async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
                 async with session.get(START_PHOTO, allow_redirects=True) as r:
                     if r.status != 200:
                         return False
-                    data = await r.read()
-                    if not data or not (r.headers.get("Content-Type", "").lower().startswith("image/")):
+                    content_type = (r.headers.get("Content-Type") or "").lower()
+                    if content_type.startswith("image/"):
+                        data = await r.read()
+                        await message.answer_photo(BufferedInputFile(data, filename="start.jpg"), caption=caption, reply_markup=HELP_KB)
+                        return True
+                    # Support image-hosting pages by reading their og:image preview.
+                    page = await r.text(errors="ignore")
+                    m = re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)', page, re.I)
+                    if not m:
+                        m = re.search(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']', page, re.I)
+                    if not m:
                         return False
-                    await message.answer_photo(BufferedInputFile(data, filename="start.jpg"), caption=caption, reply_markup=HELP_KB)
-                    return True
+                    image_url = m.group(1)
+                    if image_url.startswith('/'):
+                        from urllib.parse import urljoin
+                        image_url = urljoin(str(r.url), image_url)
+                    async with session.get(image_url, allow_redirects=True) as ir:
+                        if ir.status != 200 or not (ir.headers.get("Content-Type") or "").lower().startswith("image/"):
+                            return False
+                        data = await ir.read()
+                        await message.answer_photo(BufferedInputFile(data, filename="start.jpg"), caption=caption, reply_markup=HELP_KB)
+                        return True
         await message.answer_photo(START_PHOTO, caption=caption, reply_markup=HELP_KB)
         return True
     except Exception as e:
@@ -167,7 +229,7 @@ async def category(call: CallbackQuery):
         "lock": "<b>🔒 𝐋ᴏᴄᴋs</b>\n/lock sticker|gif|emoji|photo|video|link\n/free sticker|gif|emoji|photo|video|link",
         "nsfw": "<b>🔞 𝐍sғᴡ</b>\n/nsfw on|off\nRequires SIGHTENGINE_API_USER + SIGHTENGINE_API_SECRET.",
         "filter": "<b>🏷️ 𝐅ɪʟᴛᴇʀs</b>\n/filter word → then send the reply media/text\n/filters /stopfilter word /clearfilters",
-        "welcome": "<b>👋 𝐖ᴇʟᴄᴏᴍᴇ</b>\n/setwelcome any text/design\n/welcome on|off\n{mention} {id} {group} {count}",
+        "welcome": "<b>👋 𝐖ᴇʟᴄᴏᴍᴇ</b>\n/setwelcome text (or reply to photo)\n/welcome on|off\n{name} {username} {mention} {id} {group} {count} {first} {last}",
         "purge": "<b>🧹 𝐏ᴜʀɢᴇ</b>\nReply to the first message with /purge.",
         "rank": "<b>🏆 𝐑ᴀɴᴋɪɴɢ</b>\n/rank today\n/rank week\n/rank overall\n5 messages in 1 second = 10-minute ranking block.",
         "config": "<b>⚙️ 𝐂ᴏɴғɪɢ</b>\n/config",
@@ -194,13 +256,61 @@ async def config(message: Message):
 
 @router.message(Command("setwelcome"))
 async def setwelcome(message: Message):
-    if not await is_admin(message): return
-    text = args(message)
+    if not await is_admin(message):
+        return
+
+    text = args(message).strip()
+    reply = message.reply_to_message
+    photo_id = None
+
+    # Admin can reply to a photo with /setwelcome <text>.
+    if reply and reply.photo:
+        photo_id = reply.photo[-1].file_id
+
+    # Also allow /setwelcome in a photo caption.
+    if message.photo and message.caption:
+        parts = message.caption.split(maxsplit=1)
+        text = parts[1].strip() if len(parts) > 1 else ""
+
     if not text:
-        return await message.answer("❌ <b>𝐔sᴀɢᴇ</b>: /setwelcome your custom message")
-    await groups.update_one({"chat_id": message.chat.id}, {"$set": {"welcome": text, "welcome_on": True}}, upsert=True)
+        text = DEFAULT_WELCOME
+
+    await groups.update_one(
+        {"chat_id": message.chat.id},
+        {"$set": {
+            "welcome": text,
+            "welcome_on": True,
+            "welcome_photo": photo_id
+        }},
+        upsert=True
+    )
     await delete_safe(message)
-    await message.answer("✅ <b>𝐖ᴇʟᴄᴏᴍᴇ 𝐒ᴀᴠᴇᴅ</b>")
+    await message.answer(
+        "✅ <b>𝐖ᴇʟᴄᴏᴍᴇ 𝐒ᴀᴠᴇᴅ</b>\n"
+        + ("🖼️ 𝐏ʜᴏᴛᴏ: 𝐂ᴜsᴛᴏᴍ 𝐃ᴘ/𝐏ʜᴏᴛᴏ" if photo_id else "🖼️ 𝐏ʜᴏᴛᴏ: 𝐔sᴇʀ 𝐃ᴘ")
+    )
+
+
+@router.message(F.photo, F.caption)
+async def setwelcome_photo_caption(message: Message):
+    caption = message.caption or ""
+    if not caption.lower().startswith("/setwelcome"):
+        return
+    if not await is_admin(message):
+        return
+    parts = caption.split(maxsplit=1)
+    welcome_text = parts[1].strip() if len(parts) > 1 else DEFAULT_WELCOME
+    await groups.update_one(
+        {"chat_id": message.chat.id},
+        {"$set": {
+            "welcome": welcome_text,
+            "welcome_on": True,
+            "welcome_photo": message.photo[-1].file_id
+        }},
+        upsert=True
+    )
+    await delete_safe(message)
+    await message.answer("✅ <b>𝐖ᴇʟᴄᴏᴍᴇ 𝐏ʜᴏᴛᴏ + 𝐓ᴇxᴛ 𝐒ᴀᴠᴇᴅ</b>")
 
 
 @router.message(Command("delwelcome"))
@@ -550,32 +660,80 @@ async def record_chat(message):
         }, upsert=True)
 
 
+async def get_user_dp(user_id: int):
+    try:
+        photos = await bot.get_user_profile_photos(user_id=user_id, limit=1)
+        if not photos or not photos.photos:
+            return None
+        return photos.photos[0][-1].file_id
+    except Exception as e:
+        print("User DP error:", e)
+        return None
+
+
+async def render_welcome(g, user, group_title, count):
+    template = g.get("welcome") or DEFAULT_WELCOME
+    username = f"@{user.username}" if user.username else "—"
+    values = {
+        "{mention}": mention(user),
+        "{id}": str(user.id),
+        "{group}": html.escape(group_title or "Group"),
+        "{count}": str(count),
+        "{username}": html.escape(username),
+        "{first}": html.escape(user.first_name or ""),
+        "{last}": html.escape(user.last_name or ""),
+        "{name}": html.escape(user.full_name or "User")
+    }
+    for k, v in values.items():
+        template = template.replace(k, v)
+    return template
+
+
 @router.message(F.new_chat_members)
 async def welcome_member(message: Message):
-    if message.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP): return
-    g = await groups.find_one({"chat_id": message.chat.id})
-    if not g or not g.get("welcome_on", True) or not g.get("welcome"):
+    if message.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
         return
+
+    # Automatically initialize welcome for every group.
+    g = await groups.find_one_and_update(
+        {"chat_id": message.chat.id},
+        {"$setOnInsert": {
+            "welcome": DEFAULT_WELCOME,
+            "welcome_on": True,
+            "welcome_photo": None,
+            "created_at": time.time()
+        }},
+        upsert=True,
+        return_document=True
+    )
+    if not g:
+        g = {"welcome": DEFAULT_WELCOME, "welcome_on": True, "welcome_photo": None}
+
+    if not g.get("welcome_on", True):
+        return
+
     try:
         count = await bot.get_chat_member_count(message.chat.id)
     except Exception:
         count = "?"
-    for u in message.new_chat_members:
-        text = g["welcome"]
-        replacements = {
-            "{mention}": mention(u),
-            "{id}": str(u.id),
-            "{group}": html.escape(message.chat.title or "Group"),
-            "{count}": str(count),
-            "{username}": f"@{u.username}" if u.username else "",
-            "{first}": html.escape(u.first_name or ""),
-            "{last}": html.escape(u.last_name or "")
-        }
-        for k, v in replacements.items(): text = text.replace(k, v)
+
+    for user in message.new_chat_members:
+        caption = await render_welcome(g, user, message.chat.title, count)
+
         try:
-            await message.answer(text)
+            # Custom photo set by admin takes priority.
+            photo_id = g.get("welcome_photo") or await get_user_dp(user.id)
+
+            if photo_id:
+                await message.answer_photo(photo_id, caption=caption)
+            else:
+                await message.answer(caption)
         except Exception as e:
             print("Welcome send error:", e)
+            try:
+                await message.answer(caption)
+            except Exception:
+                pass
 
 
 @router.message(Command("broadcast"))
@@ -604,24 +762,43 @@ async def broadcast(message: Message):
 
 @router.message()
 async def moderation_and_count(message: Message):
-    if message.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP): return
-    if not message.from_user or message.from_user.is_bot: return
-
-    # A pending filter is consumed by the admin's next non-command message.
-    if not (message.text or "").startswith("/"):
-        pending = await filter_pending.find_one({"chat_id": message.chat.id, "admin_id": message.from_user.id})
-        if pending:
-            if await is_admin(message):
-                if await save_filter_response(message, pending["word"]):
-                    await filter_pending.delete_one({"_id": pending["_id"]})
-                    await message.answer(f"✅ <b>𝐅ɪʟᴇʀ 𝐑ᴇsᴘᴏɴsᴇ 𝐒ᴀᴠᴇᴅ</b>\nTrigger: <code>{html.escape(pending['word'])}</code>")
-                    return
-
-    if await exempt(message.chat.id, message.from_user.id):
-        await record_chat(message)
+    if message.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
+        return
+    if not message.from_user or message.from_user.is_bot:
         return
 
-    # FedBan is enforced automatically in every group where the bot is admin.
+    # Commands are never processed by the generic moderation pipeline.
+    # This prevents /rank, /help, /ban, etc. from accidentally triggering
+    # ban-word/NSFW/lock/FedBan logic.
+    if message.text and message.text.startswith("/"):
+        return
+
+    # Automatically initialize every group in MongoDB.
+    await groups.update_one(
+        {"chat_id": message.chat.id},
+        {"$setOnInsert": {
+            "welcome": DEFAULT_WELCOME,
+            "welcome_on": True,
+            "welcome_photo": None,
+            "created_at": time.time()
+        }},
+        upsert=True
+    )
+
+    # A pending filter is consumed by the admin's next non-command message.
+    pending = await filter_pending.find_one(
+        {"chat_id": message.chat.id, "admin_id": message.from_user.id}
+    )
+    if pending and await is_admin(message):
+        if await save_filter_response(message, pending["word"]):
+            await filter_pending.delete_one({"_id": pending["_id"]})
+            await message.answer(
+                f"✅ <b>𝐅ɪʟᴛᴇʀ 𝐑ᴇsᴘᴏɴsᴇ 𝐒ᴀᴠᴇᴅ</b>\n"
+                f"Trigger: <code>{html.escape(pending['word'])}</code>"
+            )
+            return
+
+    # FedBan is enforced only on ordinary user messages, never on commands.
     if await fedbans.find_one({"user_id": message.from_user.id}):
         try:
             await bot.ban_chat_member(message.chat.id, message.from_user.id)
@@ -630,51 +807,79 @@ async def moderation_and_count(message: Message):
             print("FedBan enforcement error:", e)
         return
 
+    if await exempt(message.chat.id, message.from_user.id):
+        await record_chat(message)
+        return
+
     g = await groups.find_one({"chat_id": message.chat.id}) or {}
     text = (message.text or message.caption or "").lower()
 
-    # Filter trigger: send the saved response; do not delete the trigger message.
-    if text and not text.startswith("/"):
+    # Filter trigger: send the saved response and keep the trigger message.
+    if text:
         rows = await filters.find({"chat_id": message.chat.id}).to_list(200)
         for row in rows:
             word = (row.get("word") or "").lower()
             if word and word in text:
-                try: await send_filter_response(message, row)
-                except Exception as e: print("Filter response error:", e)
+                try:
+                    await send_filter_response(message, row)
+                except Exception as e:
+                    print("Filter response error:", e)
                 break
 
     # Ban words.
     brows = await banwords.find({"chat_id": message.chat.id}).to_list(200)
     if text and any(x.get("word", "") in text for x in brows):
-        await delete_safe(message)
+        await delete_and_alert(message, "𝐁ᴀɴ 𝐖ᴏʀᴅ")
         return
 
-    # NSFW moderation before lock checks.
+    # NSFW moderation.
     if await check_nsfw(message, bool(g.get("nsfw", False))):
-        await delete_safe(message)
+        await delete_and_alert(message, "🔞 𝐍sғᴡ 𝐂ᴏɴᴛᴇɴᴛ")
         return
 
     # Locks.
     lrows = await locks.find({"chat_id": message.chat.id, "enabled": True}).to_list(20)
     locked = {x["kind"] for x in lrows}
-    if "sticker" in locked and message.sticker: await delete_safe(message); return
-    if "gif" in locked and message.animation: await delete_safe(message); return
-    if "photo" in locked and message.photo: await delete_safe(message); return
-    if "video" in locked and message.video: await delete_safe(message); return
-    if "link" in locked and re.search(r"(https?://|t\.me/|www\.)", text): await delete_safe(message); return
+    if "sticker" in locked and message.sticker:
+        await delete_and_alert(message, "🔒 𝐒ᴛɪᴄᴋᴇʀ 𝐋ᴏᴄᴋ"); return
+    if "gif" in locked and message.animation:
+        await delete_and_alert(message, "🔒 𝐆ɪғ 𝐋ᴏᴄᴋ"); return
+    if "photo" in locked and message.photo:
+        await delete_and_alert(message, "🔒 𝐏ʜᴏᴛᴏ 𝐋ᴏᴄᴋ"); return
+    if "video" in locked and message.video:
+        await delete_and_alert(message, "🔒 𝐕ɪᴅᴇᴏ 𝐋ᴏᴄᴋ"); return
+    if "link" in locked and re.search(r"(https?://|t\.me/|www\.)", text):
+        await delete_and_alert(message, "🔒 𝐋ɪɴᴋ 𝐋ᴏᴄᴋ"); return
     if "emoji" in locked and text and not re.search(r"[A-Za-z0-9\u0980-\u09ff\u0900-\u097f]", text) and len(text) <= 50:
-        await delete_safe(message); return
+        await delete_and_alert(message, "🔒 𝐄ᴍᴏᴊɪ 𝐋ᴏᴄᴋ"); return
 
     await record_chat(message)
 
 
 @router.edited_message()
 async def edited(message: Message):
-    if message.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP): return
-    g = await groups.find_one({"chat_id": message.chat.id})
-    if g and g.get("editdelete"):
-        await asyncio.sleep(60)
-        await delete_safe(message)
+    if message.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
+        return
+    if not message.from_user or message.from_user.is_bot:
+        return
+    g = await groups.find_one({"chat_id": message.chat.id}) or {}
+    if not g.get("editdelete"):
+        return
+
+    # Give the edited message 5 minutes, then remove it and notify the user.
+    await asyncio.sleep(300)
+    try:
+        await message.delete()
+    except Exception:
+        return
+
+    try:
+        await message.answer(
+            f"⚠️ {mention(message.from_user)} <b>𝐌ᴇssᴀɢᴇ 𝐃ᴇʟᴇᴛᴇᴅ</b>\n"
+            f"Your edited message was automatically deleted after 5 minutes."
+        )
+    except Exception as e:
+        print("Edit-delete user notification error:", e)
 
 
 def ranking_image(title, rows):
@@ -703,25 +908,59 @@ def ranking_image(title, rows):
 
 @router.message(Command("rank"))
 async def rank(message: Message):
+    if message.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
+        return
+
     p = args(message).lower().strip() or "overall"
     if p not in ("today", "week", "overall"):
         return await message.answer("❌ <b>𝐔sᴀɢᴇ</b>: /rank today|week|overall")
+
     dt = datetime.now(timezone.utc)
     if p == "today":
         key = dt.strftime("%Y-%m-%d")
     elif p == "week":
-        iso = dt.isocalendar(); key = f"{iso.year}-W{iso.week:02d}"
+        iso = dt.isocalendar()
+        key = f"{iso.year}-W{iso.week:02d}"
     else:
         key = "all"
-    cur = chat_counts.find({"chat_id": message.chat.id, "period": p, "period_key": key}).sort("count", -1).limit(10)
-    rows = []
-    async for x in cur:
-        rows.append({"full_name": x.get("full_name", "User"), "count": x.get("count", 0)})
+
+    try:
+        cur = (
+            chat_counts.find({
+                "chat_id": message.chat.id,
+                "period": p,
+                "period_key": key
+            })
+            .sort("count", -1)
+            .limit(10)
+        )
+        rows = []
+        async for x in cur:
+            rows.append({
+                "full_name": x.get("full_name", "User"),
+                "count": int(x.get("count", 0))
+            })
+    except Exception as e:
+        print("Ranking DB error:", e)
+        return await message.answer("❌ <b>𝐑ᴀɴᴋɪɴɢ 𝐃ʙ 𝐄ʀʀᴏʀ</b>")
+
     if not rows:
-        return await message.answer("📊 <b>𝐍ᴏ 𝐂ʜᴀᴛ 𝐑ᴀɴᴋɪɴɢ 𝐃ᴀᴛᴀ 𝐘ᴇᴛ</b>")
-    title = {"today": "𝐓ᴏᴅᴀʏ 𝐑ᴀɴᴋɪɴɢ", "week": "𝐖ᴇᴇᴋ 𝐑ᴀɴᴋɪɴɢ", "overall": "𝐎ᴠᴇʀᴀʟʟ 𝐑ᴀɴᴋɪɴɢ"}[p]
+        return await message.answer(
+            "📊 <b>𝐍ᴏ 𝐂ʜᴀᴛ 𝐃ᴀᴛᴀ 𝐘ᴇᴛ</b>\n"
+            "Send some normal group messages first."
+        )
+
+    title = {
+        "today": "𝐓ᴏᴅᴀʏ 𝐂ʜᴀᴛ 𝐑ᴀɴᴋɪɴɢ",
+        "week": "𝐖ᴇᴇᴋ 𝐂ʜᴀᴛ 𝐑ᴀɴᴋɪɴɢ",
+        "overall": "𝐎ᴠᴇʀᴀʟʟ 𝐂ʜᴀᴛ 𝐑ᴀɴᴋɪɴɢ"
+    }[p]
+
     chart = ranking_image(title, rows)
-    await message.answer_photo(BufferedInputFile(chart.getvalue(), filename="ranking.png"), caption=f"<b>🏆 {title}</b>\n📊 𝐓ᴏᴘ 10")
+    await message.answer_photo(
+        BufferedInputFile(chart.getvalue(), filename="ranking.png"),
+        caption=f"<b>🏆 {title}</b>\n📊 𝐓ᴏᴘ 10 𝐂ʜᴀᴛᴛᴇʀs"
+    )
 
 
 async def main():
