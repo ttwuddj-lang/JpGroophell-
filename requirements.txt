@@ -3,3 +3,4 @@ motor>=3.7,<4
 pymongo>=4.13,<5
 Pillow>=11,<12
 aiohttp>=3.12,<4
+yt-dlp>=2025.1.15,<2027

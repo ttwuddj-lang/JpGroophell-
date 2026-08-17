@@ -4,10 +4,14 @@ import io
 import os
 import re
 import time
+import tempfile
+import shutil
+from urllib.parse import urlparse
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 
 import aiohttp
+import yt_dlp
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ChatMemberStatus, ChatType, ParseMode
@@ -116,6 +120,15 @@ async def target_is_admin(message: Message, user_id: int) -> bool:
 
 
 async def exempt(chat_id, uid):
+    # Group admins/owner are always exempt from automatic moderation.
+    if uid == OWNER_ID:
+        return True
+    try:
+        member = await bot.get_chat_member(chat_id, uid)
+        if member.status in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR):
+            return True
+    except Exception:
+        pass
     x = await users.find_one({"chat_id": chat_id, "user_id": uid})
     return bool(x and (x.get("free") or x.get("approved")))
 
@@ -406,13 +419,23 @@ async def welcome_toggle(message: Message):
 # FILTERS: /filter trigger, then send the response message. It supports text/photo/video/sticker/animation/document/audio/voice.
 @router.message(Command("filter"))
 async def add_filter(message: Message):
-    if not await is_admin(message): return
+    if not await is_admin(message):
+        return
     word = args(message).lower().strip()
+    reply = message.reply_to_message
     if not word:
-        return await message.answer("❌ <b>𝐔sᴀɢᴇ</b>: /filter jpexo")
-    await filter_pending.update_one({"chat_id": message.chat.id, "admin_id": message.from_user.id},
-                                    {"$set": {"word": word, "created_at": time.time()}}, upsert=True)
-    await message.answer(f"✅ <b>𝐅ɪʟᴛᴇʀ 𝐊ᴇʏ 𝐒ᴇᴛ</b>: <code>{html.escape(word)}</code>\nNow send the text/photo/video/sticker you want when users type it.")
+        return await message.answer("❌ <b>Usage</b>: Reply to a photo/GIF/sticker/video/text and use <code>/filter word</code>")
+    if not reply:
+        return await message.answer("❌ <b>Reply to the media/text you want to save, then use:</b> <code>/filter word</code>")
+    if not await save_filter_response(reply, word):
+        return await message.answer("❌ <b>This message type cannot be saved as a filter.</b>")
+    await filter_pending.delete_many({"chat_id": message.chat.id, "admin_id": message.from_user.id})
+    await delete_safe(message)
+    await message.answer(
+        f"✅ <b>Filter Saved</b>\n"
+        f"🔑 Trigger: <code>{html.escape(word)}</code>\n"
+        f"Now send <code>{html.escape(word)}</code> and I will reply with the saved content."
+    )
 
 
 async def save_filter_response(message: Message, word: str):
@@ -498,6 +521,19 @@ async def lock(message: Message):
         return await message.answer("❌ <b>𝐔sᴀɢᴇ</b>: /lock sticker|gif|emoji|photo|video|link")
     await locks.update_one({"chat_id": message.chat.id, "kind": kind}, {"$set": {"enabled": True}}, upsert=True)
     await message.answer(f"🔒 <b>𝐋ᴏᴄᴋᴇᴅ</b>: {html.escape(kind)}")
+
+
+@router.message(Command("id"))
+async def show_id(message: Message):
+    t = await target(message)
+    if t:
+        return await message.answer(
+            f"🆔 <b>User ID</b>\n👤 {mention(t)}\n<code>{t.id}</code>"
+        )
+    # In a private chat /id with no target returns the sender's own ID.
+    if message.chat.type == ChatType.PRIVATE and message.from_user:
+        return await message.answer(f"🆔 <b>Your User ID:</b> <code>{message.from_user.id}</code>")
+    await message.answer("❌ <b>Reply to a user's message or use /id @username /id user_id</b>")
 
 
 @router.message(Command("free"))
@@ -771,6 +807,9 @@ async def render_welcome(g, user, group_title, count):
     }
     for k, v in values.items():
         template = template.replace(k, v)
+    # Telegram quote-style welcome card, matching the requested visual format.
+    if not template.lstrip().startswith("<blockquote>"):
+        template = f"<blockquote>{template}</blockquote>"
     return template
 
 
@@ -919,11 +958,90 @@ async def broadcast(message: Message):
     await message.answer(f"📢 <b>𝐁ʀᴏᴀᴅᴄᴀsᴛ 𝐂ᴏᴍᴘʟᴇᴛᴇ</b>\n✅ Sent: {sent}\n❌ Failed: {failed}")
 
 
+YTDLP_MAX_MB = float(os.getenv("YTDLP_MAX_MB", "48"))
+VIDEO_LINK_RE = re.compile(
+    r"https?://(?:www\.)?(?:youtube\.com/(?:watch\?v=|shorts/|live/)|youtu\.be/|instagram\.com/(?:reel|p|tv)/)[^\s<>]+",
+    re.IGNORECASE,
+)
+
+
+def extract_supported_video_url(text: str):
+    m = VIDEO_LINK_RE.search(text or "")
+    return m.group(0).rstrip(".,)>]}") if m else None
+
+
+def download_video_sync(url: str, workdir: str):
+    outtmpl = os.path.join(workdir, "%(id)s.%(ext)s")
+    opts = {
+        "outtmpl": outtmpl,
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "restrictfilenames": True,
+        "format": f"best[ext=mp4][filesize<{int(YTDLP_MAX_MB * 1024 * 1024)}]/best[filesize<{int(YTDLP_MAX_MB * 1024 * 1024)}]/best[ext=mp4]/best",
+    }
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        path = ydl.prepare_filename(info)
+        if not os.path.exists(path):
+            candidates = [os.path.join(workdir, x) for x in os.listdir(workdir)]
+            if not candidates:
+                raise FileNotFoundError("Downloaded file not found")
+            path = max(candidates, key=os.path.getsize)
+        return path, info.get("title") or "Video"
+
+
+async def handle_video_link(message: Message) -> bool:
+    text = message.text or ""
+    url = extract_supported_video_url(text)
+    if not url:
+        return False
+    # Only act on supported public YouTube/Instagram video URLs.
+    await delete_safe(message)
+    workdir = tempfile.mkdtemp(prefix="video_dl_")
+    try:
+        await bot.send_chat_action(message.chat.id, "upload_video")
+        path, title = await asyncio.to_thread(download_video_sync, url, workdir)
+        size = os.path.getsize(path)
+        if size > int(YTDLP_MAX_MB * 1024 * 1024):
+            await bot.send_message(message.chat.id, "❌ <b>Video is too large to send.</b>")
+            return True
+        with open(path, "rb") as f:
+            data = f.read()
+        filename = os.path.basename(path)
+        await bot.send_video(
+            message.chat.id,
+            BufferedInputFile(data, filename=filename),
+            caption=html.escape(title)[:900],
+            supports_streaming=True,
+        )
+    except Exception as e:
+        print("Video downloader error:", repr(e))
+        await bot.send_message(
+            message.chat.id,
+            "❌ <b>Sorry, I couldn't download that video.</b>\n"
+            "The link may be private, unavailable, unsupported, or temporarily blocked."
+        )
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+    return True
+
+
 @router.message()
 async def moderation_and_count(message: Message):
-    if message.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
-        return
     if not message.from_user or message.from_user.is_bot:
+        return
+
+    # YouTube/Instagram public video links work in groups and private DMs.
+    if message.chat.type == ChatType.PRIVATE:
+        if await handle_video_link(message):
+            return
+    elif message.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP):
+        # Keep admin messages untouched by the link downloader too.
+        if not await is_admin(message) and await handle_video_link(message):
+            return
+
+    if message.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
         return
 
     await users.update_one(
@@ -955,19 +1073,6 @@ async def moderation_and_count(message: Message):
         upsert=True
     )
 
-    # A pending filter is consumed by the admin's next non-command message.
-    pending = await filter_pending.find_one(
-        {"chat_id": message.chat.id, "admin_id": message.from_user.id}
-    )
-    if pending and await is_admin(message):
-        if await save_filter_response(message, pending["word"]):
-            await filter_pending.delete_one({"_id": pending["_id"]})
-            await message.answer(
-                f"✅ <b>𝐅ɪʟᴛᴇʀ 𝐑ᴇsᴘᴏɴsᴇ 𝐒ᴀᴠᴇᴅ</b>\n"
-                f"Trigger: <code>{html.escape(pending['word'])}</code>"
-            )
-            return
-
     # FedBan is enforced only on ordinary user messages, never on commands.
     if await fedbans.find_one({"user_id": message.from_user.id}):
         try:
@@ -984,17 +1089,16 @@ async def moderation_and_count(message: Message):
     g = await groups.find_one({"chat_id": message.chat.id}) or {}
     text = (message.text or message.caption or "").lower()
 
-    # Filter trigger: send the saved response and keep the trigger message.
-    if text:
-        rows = await filters.find({"chat_id": message.chat.id}).to_list(200)
-        for row in rows:
-            word = (row.get("word") or "").lower()
-            if word and word in text:
-                try:
-                    await send_filter_response(message, row)
-                except Exception as e:
-                    print("Filter response error:", e)
-                break
+    # Filter trigger: match the whole message (case-insensitive) and reply with the saved media/text.
+    if text and len(text.strip()) <= 100:
+        trigger = text.strip().lower()
+        row = await filters.find_one({"chat_id": message.chat.id, "word": trigger})
+        if row:
+            try:
+                await send_filter_response(message, row)
+            except Exception as e:
+                print("Filter response error:", e)
+            return
 
     # Ban words.
     brows = await banwords.find({"chat_id": message.chat.id}).to_list(200)
@@ -1041,20 +1145,20 @@ async def edited(message: Message):
     if not g.get("editdelete"):
         return
 
-    # Give the edited message 5 minutes, then remove it and notify the user.
+    # Warn immediately, then delete the edited message after 5 minutes.
+    try:
+        await message.answer(
+            f"⚠️ {mention(message.from_user)} <b>Your message was edited.</b>\n"
+            f"This edited message will be deleted after 5 minutes."
+        )
+    except Exception as e:
+        print("Edit warning error:", e)
+
     await asyncio.sleep(300)
     try:
         await message.delete()
-    except Exception:
-        return
-
-    try:
-        await message.answer(
-            f"⚠️ {mention(message.from_user)} <b>𝐌ᴇssᴀɢᴇ 𝐃ᴇʟᴇᴛᴇᴅ</b>\n"
-            f"Your edited message was automatically deleted after 5 minutes."
-        )
     except Exception as e:
-        print("Edit-delete user notification error:", e)
+        print("Edit-delete error:", e)
 
 
 def ranking_image(title, rows):
