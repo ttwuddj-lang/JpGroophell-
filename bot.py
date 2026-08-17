@@ -11,12 +11,11 @@ from collections import defaultdict, deque
 from datetime import datetime, timezone
 
 import aiohttp
-import yt_dlp
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ChatMemberStatus, ChatType, ParseMode
 from aiogram.filters import Command, CommandStart
-from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, ChatMemberUpdated, ChatJoinRequest
+from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, ChatMemberUpdated, ChatJoinRequest, BotCommand, BotCommandScopeAllChatAdministrators
 from motor.motor_asyncio import AsyncIOMotorClient
 from PIL import Image, ImageDraw, ImageFont
 
@@ -273,7 +272,13 @@ async def send_start_photo(message: Message, caption: str):
 @router.message(CommandStart())
 async def start(message: Message):
     text = ("<b>𝐖ᴇʟᴄᴏᴍᴇ 𝐓ᴏ 𝐆ʀᴏᴜᴘ 𝐇ᴇʟᴘ</b>\n\n"
-            "🛡️ 𝐆ʀᴏᴜᴘ 𝐌ᴏᴅᴇʀᴀᴛɪᴏɴ\n🔒 𝐋ᴏᴄᴋs & 𝐅ɪʟᴛᴇʀs\n🏆 𝐂ʜᴀᴛ 𝐑ᴀɴᴋɪɴɢ\n\nUse /help to open the menu.")
+            "🛡️ 𝐌ᴏᴅᴇʀᴀᴛɪᴏɴ\n"
+            "🏷️ 𝐅ɪʟᴛᴇʀs — reply to any media/text with /filter name\n"
+            "🆔 /id — reply/tag a user to get User ID\n"
+            "👤 /approve /free /ban /unban /mute /unmute /kick\n"
+            "✏️ 𝐄ᴅɪᴛ 𝐃ᴇʟᴇᴛᴇ — edited messages are warned and removed after 5 minutes\n"
+            "👋 𝐖ᴇʟᴄᴏᴍᴇ • 🔒 𝐋ᴏᴄᴋs • 🏆 𝐑ᴀɴᴋɪɴɢ\n\n"
+            "Use /help to open the full menu.")
     if not await send_start_photo(message, text):
         await message.answer(text, reply_markup=HELP_KB)
 
@@ -416,25 +421,25 @@ async def welcome_toggle(message: Message):
     await message.answer("✅ <b>𝐖ᴇʟᴄᴏᴍᴇ 𝐔ᴘᴅᴀᴛᴇᴅ</b>")
 
 
-# FILTERS: /filter trigger, then send the response message. It supports text/photo/video/sticker/animation/document/audio/voice.
+# FILTERS: save the exact replied message in ONE command.
+# Usage: reply to photo/GIF/sticker/video/text/etc. -> /filter name
 @router.message(Command("filter"))
 async def add_filter(message: Message):
     if not await is_admin(message):
         return
-    word = args(message).lower().strip()
+    word = re.sub(r"\s+", " ", args(message).strip()).lower()
     reply = message.reply_to_message
     if not word:
-        return await message.answer("❌ <b>Usage</b>: Reply to a photo/GIF/sticker/video/text and use <code>/filter word</code>")
+        return await message.answer("❌ <b>Usage:</b> Reply to the media/text and use <code>/filter name</code>")
     if not reply:
-        return await message.answer("❌ <b>Reply to the media/text you want to save, then use:</b> <code>/filter word</code>")
+        return await message.answer("❌ <b>Reply to the photo/GIF/sticker/video/text you want to save.</b>\nThen use <code>/filter name</code>")
     if not await save_filter_response(reply, word):
         return await message.answer("❌ <b>This message type cannot be saved as a filter.</b>")
-    await filter_pending.delete_many({"chat_id": message.chat.id, "admin_id": message.from_user.id})
     await delete_safe(message)
     await message.answer(
         f"✅ <b>Filter Saved</b>\n"
-        f"🔑 Trigger: <code>{html.escape(word)}</code>\n"
-        f"Now send <code>{html.escape(word)}</code> and I will reply with the saved content."
+        f"🔑 <code>{html.escape(word)}</code>\n"
+        f"Send <code>{html.escape(word)}</code> and I will reply with the saved content."
     )
 
 
@@ -958,7 +963,6 @@ async def broadcast(message: Message):
     await message.answer(f"📢 <b>𝐁ʀᴏᴀᴅᴄᴀsᴛ 𝐂ᴏᴍᴘʟᴇᴛᴇ</b>\n✅ Sent: {sent}\n❌ Failed: {failed}")
 
 
-YTDLP_MAX_MB = float(os.getenv("YTDLP_MAX_MB", "48"))
 VIDEO_LINK_RE = re.compile(
     r"https?://(?:www\.)?(?:youtube\.com/(?:watch\?v=|shorts/|live/)|youtu\.be/|instagram\.com/(?:reel|p|tv)/)[^\s<>]+",
     re.IGNORECASE,
@@ -970,60 +974,13 @@ def extract_supported_video_url(text: str):
     return m.group(0).rstrip(".,)>]}") if m else None
 
 
-def download_video_sync(url: str, workdir: str):
-    outtmpl = os.path.join(workdir, "%(id)s.%(ext)s")
-    opts = {
-        "outtmpl": outtmpl,
-        "noplaylist": True,
-        "quiet": True,
-        "no_warnings": True,
-        "restrictfilenames": True,
-        "format": f"best[ext=mp4][filesize<{int(YTDLP_MAX_MB * 1024 * 1024)}]/best[filesize<{int(YTDLP_MAX_MB * 1024 * 1024)}]/best[ext=mp4]/best",
-    }
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        path = ydl.prepare_filename(info)
-        if not os.path.exists(path):
-            candidates = [os.path.join(workdir, x) for x in os.listdir(workdir)]
-            if not candidates:
-                raise FileNotFoundError("Downloaded file not found")
-            path = max(candidates, key=os.path.getsize)
-        return path, info.get("title") or "Video"
-
-
 async def handle_video_link(message: Message) -> bool:
-    text = message.text or ""
-    url = extract_supported_video_url(text)
-    if not url:
+    """Delete supported YouTube/Instagram video links in groups. No downloading."""
+    if message.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
         return False
-    # Only act on supported public YouTube/Instagram video URLs.
+    if not extract_supported_video_url(message.text or message.caption or ""):
+        return False
     await delete_safe(message)
-    workdir = tempfile.mkdtemp(prefix="video_dl_")
-    try:
-        await bot.send_chat_action(message.chat.id, "upload_video")
-        path, title = await asyncio.to_thread(download_video_sync, url, workdir)
-        size = os.path.getsize(path)
-        if size > int(YTDLP_MAX_MB * 1024 * 1024):
-            await bot.send_message(message.chat.id, "❌ <b>Video is too large to send.</b>")
-            return True
-        with open(path, "rb") as f:
-            data = f.read()
-        filename = os.path.basename(path)
-        await bot.send_video(
-            message.chat.id,
-            BufferedInputFile(data, filename=filename),
-            caption=html.escape(title)[:900],
-            supports_streaming=True,
-        )
-    except Exception as e:
-        print("Video downloader error:", repr(e))
-        await bot.send_message(
-            message.chat.id,
-            "❌ <b>Sorry, I couldn't download that video.</b>\n"
-            "The link may be private, unavailable, unsupported, or temporarily blocked."
-        )
-    finally:
-        shutil.rmtree(workdir, ignore_errors=True)
     return True
 
 
@@ -1032,13 +989,10 @@ async def moderation_and_count(message: Message):
     if not message.from_user or message.from_user.is_bot:
         return
 
-    # YouTube/Instagram public video links work in groups and private DMs.
-    if message.chat.type == ChatType.PRIVATE:
+    # YouTube/Instagram video links are removed in groups. Downloader is disabled.
+    # This applies to normal users, admins, and the owner.
+    if message.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP):
         if await handle_video_link(message):
-            return
-    elif message.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP):
-        # Keep admin messages untouched by the link downloader too.
-        if not await is_admin(message) and await handle_video_link(message):
             return
 
     if message.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
@@ -1082,23 +1036,23 @@ async def moderation_and_count(message: Message):
             print("FedBan enforcement error:", e)
         return
 
-    if await exempt(message.chat.id, message.from_user.id):
-        await record_chat(message)
-        return
-
     g = await groups.find_one({"chat_id": message.chat.id}) or {}
-    text = (message.text or message.caption or "").lower()
+    text = re.sub(r"\s+", " ", (message.text or message.caption or "").strip()).lower()
 
-    # Filter trigger: match the whole message (case-insensitive) and reply with the saved media/text.
-    if text and len(text.strip()) <= 100:
-        trigger = text.strip().lower()
-        row = await filters.find_one({"chat_id": message.chat.id, "word": trigger})
+    # FILTERS MUST RUN BEFORE the admin/free exemption so an admin can also test a filter.
+    # Only a plain text/caption trigger is matched; media messages themselves do not trigger filters.
+    if text and len(text) <= 100 and not text.startswith("/"):
+        row = await filters.find_one({"chat_id": message.chat.id, "word": text})
         if row:
             try:
                 await send_filter_response(message, row)
             except Exception as e:
                 print("Filter response error:", e)
             return
+
+    if await exempt(message.chat.id, message.from_user.id):
+        await record_chat(message)
+        return
 
     # Ban words.
     brows = await banwords.find({"chat_id": message.chat.id}).to_list(200)
@@ -1255,6 +1209,28 @@ async def main():
     await warnings.create_index([("chat_id", 1), ("user_id", 1)], unique=True)
     await chat_counts.create_index([("chat_id", 1), ("user_id", 1), ("period", 1), ("period_key", 1)], unique=True)
     await fedbans.create_index("user_id", unique=True)
+    await bot.set_my_commands([
+        BotCommand(command="start", description="Open bot menu"),
+        BotCommand(command="help", description="Show all features"),
+        BotCommand(command="id", description="Get a user's Telegram ID"),
+        BotCommand(command="filter", description="Save replied media/text as a filter"),
+        BotCommand(command="filters", description="List saved filters"),
+        BotCommand(command="stopfilter", description="Remove a filter"),
+        BotCommand(command="clearfilters", description="Clear all filters"),
+        BotCommand(command="approve", description="Approve a user"),
+        BotCommand(command="free", description="Free a user from moderation"),
+        BotCommand(command="ban", description="Ban a user"),
+        BotCommand(command="unban", description="Unban a user"),
+        BotCommand(command="mute", description="Mute a user"),
+        BotCommand(command="unmute", description="Unmute a user"),
+        BotCommand(command="kick", description="Kick a user"),
+        BotCommand(command="editdelete", description="Edited-message protection"),
+        BotCommand(command="welcome", description="Turn welcome on/off"),
+        BotCommand(command="setwelcome", description="Set welcome message/photo"),
+        BotCommand(command="rank", description="Show chat ranking"),
+        BotCommand(command="lock", description="Lock a media type"),
+        BotCommand(command="unlock", description="Unlock a media type"),
+    ], scope=BotCommandScopeAllChatAdministrators())
     print("MongoDB Group Help Bot started")
     # Do not rely on Telegram service messages. Receive chat_member updates
     # directly so welcome works in both small and large groups.
