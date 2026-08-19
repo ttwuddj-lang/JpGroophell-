@@ -75,3 +75,8 @@ Automatic NSFW, ban-word and lock violations are **delete + admin notification o
 
 ## Edited-message cleanup
 When `/editdelete on` is enabled for a group, an edited user message is automatically deleted after **5 minutes**. The bot then tags the user with a short notification. This action does **not** ban or mute the user.
+
+
+## Real VC Join Tracker
+
+Set `API_ID`, `API_HASH`, and `STRING_SESSION` in Railway. Keep the string session private.

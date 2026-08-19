@@ -271,19 +271,12 @@ async def send_start_photo(message: Message, caption: str):
 
 @router.message(CommandStart())
 async def start(message: Message):
+    # Keep the /start message compact; the full command list is exposed through Telegram's command menu.
     text = ("🛡️ <b>𝐆ʀᴏᴜᴘ 𝐇ᴇʟᴘ & 𝐒ᴀғᴇᴛʏ</b>\n"
             "⚡ 𝐒ᴍᴀʀᴛ 𝐆ʀᴏᴜᴘ 𝐌ᴏᴅᴇʀᴀᴛɪᴏɴ\n"
             "🔒 𝐋ᴏᴄᴋs • 𝐅ɪʟᴛᴇʀs • 𝐖ᴇʟᴄᴏᴍᴇ\n"
             "🛡️ 𝐍sғᴡ 𝐑ᴇᴍᴏᴠᴇʀ • 𝐀ɴᴛɪ-𝐒ᴘᴀᴍ\n"
-            "🤖 𝐏ᴏᴡᴇʀᴇᴅ ʙʏ -\n\n"
-            "🏷️ /filter <code>name</code> — reply to media/text to save a filter\n"
-            "🆔 /id — reply/tag a user to get User ID\n"
-            "👤 /approve /free /ban /unban /mute /unmute /kick\n"
-            "🚫 /banword /freeword — banned-word system\n"
-            "🔒 /lock /unlock — media locks\n"
-            "✏️ /editdelete — edited messages are warned and removed after 5 minutes\n"
-            "👋 /welcome /setwelcome • 🏆 /rank • 🧹 /purge\n"
-            "🌐 /fedban /unfedban • ⚠️ /warn /warnings • 🔞 /nsfw\n\n"
+            "🤖 𝐏ᴏᴡᴇʀᴇᴅ ʙʏ - <a href='https://t.me/JP_NETWORK'>@JP_NETWORK</a>\n\n"
             "Use /help to open the full menu.")
     if not await send_start_photo(message, text):
         await message.answer(text, reply_markup=HELP_KB)
@@ -1109,19 +1102,12 @@ async def moderation_and_count(message: Message):
 
 @router.message(F.video_chat_participants_invited)
 async def video_chat_participants_invited(message: Message):
-    """Optional VC invite reminder. Actual join events are not exposed by Bot API."""
     if message.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
         return
-    event = message.video_chat_participants_invited
-    invited = getattr(event, "users", None) or []
-    if not invited:
-        return
+    invited = getattr(message.video_chat_participants_invited, "users", None) or []
     for user in invited:
-        # User name stays in the user's original font and is a clickable mention.
         try:
-            await message.answer(
-                f"🐥 {mention(user)}, 𝐉ᴏɪɴ ᴛʜᴇ 𝐕ᴄ ғᴀsᴛ 😼"
-            )
+            await message.answer(f"🐥 {mention(user)}, 𝐉ᴏɪɴ ᴛʜᴇ 𝐕ᴄ ғᴀsᴛ 😼")
         except Exception as e:
             print("Video chat invite reminder error:", e)
 
@@ -1233,6 +1219,9 @@ async def rank(message: Message):
     )
 
 
+
+
+
 async def main():
     # Explicitly request membership updates. This makes welcome independent of
     # Telegram's visible "joined via invite link" service message.
@@ -1324,9 +1313,12 @@ async def main():
     # directly so welcome works in both small and large groups.
     await dp.start_polling(
         bot,
-        allowed_updates=["message", "callback_query", "chat_member", "chat_join_request", "my_chat_member"]
+        allowed_updates=["message", "callback_query", "chat_member", "chat_join_request", "my_chat_member", "video_chat_participants_invited", "video_chat_ended"]
     )
 
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+
+START_TEXT_FINAL = '🛡️ 𝐆ʀᴏᴜᴘ 𝐇ᴇʟᴘ & 𝐒ᴀғᴇᴛʏ\n⚡ 𝐒ᴍᴀʀᴛ 𝐆ʀᴏᴜᴘ 𝐌ᴏᴅᴇʀᴀᴛɪᴏɴ\n🔒 𝐋ᴏᴄᴋs • 𝐅ɪʟᴛᴇʀs • 𝐖ᴇʟᴄᴏᴍᴇ\n🛡️ 𝐍sғᴡ 𝐑ᴇᴍᴏᴠᴇʀ • 𝐀ɴᴛɪ-𝐒ᴘᴀᴍ\n🤖 𝐏ᴏᴡᴇʀᴇᴅ ʙʏ - @JP_NETWORK\n\n👉 𝐔sᴇ /help ᴛᴏ ᴏᴘᴇɴ ᴛʜᴇ ғᴜʟʟ 𝐌ᴇɴᴜ.'
