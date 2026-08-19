@@ -271,13 +271,19 @@ async def send_start_photo(message: Message, caption: str):
 
 @router.message(CommandStart())
 async def start(message: Message):
-    text = ("<b>𝐖ᴇʟᴄᴏᴍᴇ 𝐓ᴏ 𝐆ʀᴏᴜᴘ 𝐇ᴇʟᴘ</b>\n\n"
-            "🛡️ 𝐌ᴏᴅᴇʀᴀᴛɪᴏɴ\n"
-            "🏷️ 𝐅ɪʟᴛᴇʀs — reply to any media/text with /filter name\n"
+    text = ("🛡️ <b>𝐆ʀᴏᴜᴘ 𝐇ᴇʟᴘ & 𝐒ᴀғᴇᴛʏ</b>\n"
+            "⚡ 𝐒ᴍᴀʀᴛ 𝐆ʀᴏᴜᴘ 𝐌ᴏᴅᴇʀᴀᴛɪᴏɴ\n"
+            "🔒 𝐋ᴏᴄᴋs • 𝐅ɪʟᴛᴇʀs • 𝐖ᴇʟᴄᴏᴍᴇ\n"
+            "🛡️ 𝐍sғᴡ 𝐑ᴇᴍᴏᴠᴇʀ • 𝐀ɴᴛɪ-𝐒ᴘᴀᴍ\n"
+            "🤖 𝐏ᴏᴡᴇʀᴇᴅ ʙʏ -\n\n"
+            "🏷️ /filter <code>name</code> — reply to media/text to save a filter\n"
             "🆔 /id — reply/tag a user to get User ID\n"
             "👤 /approve /free /ban /unban /mute /unmute /kick\n"
-            "✏️ 𝐄ᴅɪᴛ 𝐃ᴇʟᴇᴛᴇ — edited messages are warned and removed after 5 minutes\n"
-            "👋 𝐖ᴇʟᴄᴏᴍᴇ • 🔒 𝐋ᴏᴄᴋs • 🏆 𝐑ᴀɴᴋɪɴɢ\n\n"
+            "🚫 /banword /freeword — banned-word system\n"
+            "🔒 /lock /unlock — media locks\n"
+            "✏️ /editdelete — edited messages are warned and removed after 5 minutes\n"
+            "👋 /welcome /setwelcome • 🏆 /rank • 🧹 /purge\n"
+            "🌐 /fedban /unfedban • ⚠️ /warn /warnings • 🔞 /nsfw\n\n"
             "Use /help to open the full menu.")
     if not await send_start_photo(message, text):
         await message.answer(text, reply_markup=HELP_KB)
@@ -318,7 +324,7 @@ async def category(call: CallbackQuery):
         "mod": "<b>🛡️ 𝐌ᴏᴅᴇʀᴀᴛɪᴏɴ</b>\n/ban /unban /mute /unmute /kick /warn /warnings /dmute /dban /fedban",
         "lock": "<b>🔒 𝐋ᴏᴄᴋs & 𝐔ɴʟᴏᴄᴋs</b>\n/lock sticker|gif|emoji|photo|video|link\n/unlock sticker|gif|emoji|photo|video|link\n/approve <code>user_id</code>\n/free <code>user_id</code>",
         "nsfw": "<b>🔞 𝐍sғᴡ</b>\n/nsfw on|off\nAutomatic explicit-content moderation and admin alerts.",
-        "filter": "<b>🏷️ 𝐅ɪʟᴛᴇʀs</b>\n/filter word → then send the reply media/text\n/filters /stopfilter word /clearfilters",
+        "filter": "<b>🏷️ 𝐅ɪʟᴛᴇʀs</b>\n/filter word → reply to media/text and save it in one command\n/filters /stopfilter word /clearfilters",
         "welcome": "<b>👋 𝐖ᴇʟᴄᴏᴍᴇ</b>\n/setwelcome text (or reply to photo)\n/welcome on|off\n{name} {username} {mention} {id} {group} {count} {first} {last}",
         "purge": "<b>🧹 𝐏ᴜʀɢᴇ</b>\nReply to the first message with /purge.",
         "rank": "<b>🏆 𝐑ᴀɴᴋɪɴɢ</b>\n/rank today\n/rank week\n/rank overall\n5 messages in 1 second = 10-minute ranking block.",
@@ -468,15 +474,27 @@ async def save_filter_response(message: Message, word: str):
 
 
 async def send_filter_response(message: Message, row):
+    # Always send the saved filter as a reply to the trigger message.
+    rp = message.as_reply_parameters()
     kind = row.get("kind")
-    if kind == "text": await message.answer(row.get("text", "")); return
-    if kind == "photo": await message.answer_photo(row["file_id"], caption=row.get("caption") or None); return
-    if kind == "video": await message.answer_video(row["file_id"], caption=row.get("caption") or None); return
-    if kind == "animation": await message.answer_animation(row["file_id"], caption=row.get("caption") or None); return
-    if kind == "sticker": await message.answer_sticker(row["file_id"]); return
-    if kind == "document": await message.answer_document(row["file_id"], caption=row.get("caption") or None); return
-    if kind == "audio": await message.answer_audio(row["file_id"], caption=row.get("caption") or None); return
-    if kind == "voice": await message.answer_voice(row["file_id"], caption=row.get("caption") or None); return
+    if kind == "text":
+        await message.answer(row.get("text", ""), reply_parameters=rp)
+    elif kind == "photo":
+        await message.answer_photo(row["file_id"], caption=row.get("caption") or None, reply_parameters=rp)
+    elif kind == "video":
+        await message.answer_video(row["file_id"], caption=row.get("caption") or None, reply_parameters=rp)
+    elif kind == "animation":
+        await message.answer_animation(row["file_id"], caption=row.get("caption") or None, reply_parameters=rp)
+    elif kind == "sticker":
+        await message.answer_sticker(row["file_id"], reply_parameters=rp)
+    elif kind == "document":
+        await message.answer_document(row["file_id"], caption=row.get("caption") or None, reply_parameters=rp)
+    elif kind == "audio":
+        await message.answer_audio(row["file_id"], caption=row.get("caption") or None, reply_parameters=rp)
+    elif kind == "voice":
+        await message.answer_voice(row["file_id"], caption=row.get("caption") or None, reply_parameters=rp)
+    else:
+        raise ValueError("Unknown filter kind")
 
 
 @router.message(Command("stopfilter"))
@@ -1089,6 +1107,25 @@ async def moderation_and_count(message: Message):
     await record_chat(message)
 
 
+@router.message(F.video_chat_participants_invited)
+async def video_chat_participants_invited(message: Message):
+    """Optional VC invite reminder. Actual join events are not exposed by Bot API."""
+    if message.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
+        return
+    event = message.video_chat_participants_invited
+    invited = getattr(event, "users", None) or []
+    if not invited:
+        return
+    for user in invited:
+        # User name stays in the user's original font and is a clickable mention.
+        try:
+            await message.answer(
+                f"🐥 {mention(user)}, 𝐉ᴏɪɴ ᴛʜᴇ 𝐕ᴄ ғᴀsᴛ 😼"
+            )
+        except Exception as e:
+            print("Video chat invite reminder error:", e)
+
+
 @router.edited_message()
 async def edited(message: Message):
     if message.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
@@ -1217,20 +1254,71 @@ async def main():
         BotCommand(command="filters", description="List saved filters"),
         BotCommand(command="stopfilter", description="Remove a filter"),
         BotCommand(command="clearfilters", description="Clear all filters"),
+        BotCommand(command="banword", description="Ban a word"),
+        BotCommand(command="freeword", description="Unban a word"),
         BotCommand(command="approve", description="Approve a user"),
-        BotCommand(command="free", description="Free a user from moderation"),
+        BotCommand(command="unapprove", description="Remove user approval"),
+        BotCommand(command="free", description="Free a user"),
+        BotCommand(command="unfree", description="Remove free status"),
         BotCommand(command="ban", description="Ban a user"),
         BotCommand(command="unban", description="Unban a user"),
         BotCommand(command="mute", description="Mute a user"),
         BotCommand(command="unmute", description="Unmute a user"),
         BotCommand(command="kick", description="Kick a user"),
-        BotCommand(command="editdelete", description="Edited-message protection"),
-        BotCommand(command="welcome", description="Turn welcome on/off"),
-        BotCommand(command="setwelcome", description="Set welcome message/photo"),
-        BotCommand(command="rank", description="Show chat ranking"),
+        BotCommand(command="dmute", description="Delete and mute a user"),
+        BotCommand(command="dban", description="Delete and ban a user"),
+        BotCommand(command="warn", description="Warn a user"),
+        BotCommand(command="warnings", description="Check user warnings"),
+        BotCommand(command="fedban", description="Federated ban a user"),
+        BotCommand(command="unfedban", description="Remove federated ban"),
+        BotCommand(command="purge", description="Purge messages"),
         BotCommand(command="lock", description="Lock a media type"),
         BotCommand(command="unlock", description="Unlock a media type"),
+        BotCommand(command="config", description="Show group configuration"),
+        BotCommand(command="welcome", description="Turn welcome on or off"),
+        BotCommand(command="setwelcome", description="Set welcome message/photo"),
+        BotCommand(command="delwelcome", description="Delete welcome message"),
+        BotCommand(command="editdelete", description="Edited-message protection"),
+        BotCommand(command="nsfw", description="Turn NSFW guard on or off"),
+        BotCommand(command="rank", description="Show chat ranking"),
     ], scope=BotCommandScopeAllChatAdministrators())
+    # Force the full command list for all users as well. Broadcast is intentionally omitted.
+    await bot.set_my_commands([
+        BotCommand(command="start", description="Open bot menu"),
+        BotCommand(command="help", description="Show all features"),
+        BotCommand(command="id", description="Get a user's Telegram ID"),
+        BotCommand(command="filter", description="Save replied media/text as a filter"),
+        BotCommand(command="filters", description="List saved filters"),
+        BotCommand(command="stopfilter", description="Remove a filter"),
+        BotCommand(command="clearfilters", description="Clear all filters"),
+        BotCommand(command="banword", description="Ban a word"),
+        BotCommand(command="freeword", description="Unban a word"),
+        BotCommand(command="approve", description="Approve a user"),
+        BotCommand(command="unapprove", description="Remove user approval"),
+        BotCommand(command="free", description="Free a user"),
+        BotCommand(command="unfree", description="Remove free status"),
+        BotCommand(command="ban", description="Ban a user"),
+        BotCommand(command="unban", description="Unban a user"),
+        BotCommand(command="mute", description="Mute a user"),
+        BotCommand(command="unmute", description="Unmute a user"),
+        BotCommand(command="kick", description="Kick a user"),
+        BotCommand(command="dmute", description="Delete and mute a user"),
+        BotCommand(command="dban", description="Delete and ban a user"),
+        BotCommand(command="warn", description="Warn a user"),
+        BotCommand(command="warnings", description="Check user warnings"),
+        BotCommand(command="fedban", description="Federated ban a user"),
+        BotCommand(command="unfedban", description="Remove federated ban"),
+        BotCommand(command="purge", description="Purge messages"),
+        BotCommand(command="lock", description="Lock a media type"),
+        BotCommand(command="unlock", description="Unlock a media type"),
+        BotCommand(command="config", description="Show group configuration"),
+        BotCommand(command="welcome", description="Turn welcome on or off"),
+        BotCommand(command="setwelcome", description="Set welcome message/photo"),
+        BotCommand(command="delwelcome", description="Delete welcome message"),
+        BotCommand(command="editdelete", description="Edited-message protection"),
+        BotCommand(command="nsfw", description="Turn NSFW guard on or off"),
+        BotCommand(command="rank", description="Show chat ranking"),
+    ])
     print("MongoDB Group Help Bot started")
     # Do not rely on Telegram service messages. Receive chat_member updates
     # directly so welcome works in both small and large groups.
