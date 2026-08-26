@@ -6,7 +6,7 @@ import re
 import time
 import tempfile
 import shutil
-import math
+import urllib.parse
 from urllib.parse import urlparse
 from collections import defaultdict, deque
 from datetime import datetime, timezone
@@ -30,11 +30,12 @@ OWNER_URL = os.getenv("OWNER_URL", "https://t.me/")
 CHANNEL_URL = os.getenv("CHANNEL_URL", "https://t.me/")
 
 DEFAULT_WELCOME = (
-    "<b>👋 𝐖ᴇʟᴄᴏᴍᴇ {mention}!</b>"
+    "<b>👋 𝐖ᴇʟᴄᴏᴍᴇ {mention}!</b>\n\n"
+    "🆔 𝐈ᴅ: <code>{id}</code>\n"
+    "👤 𝐔sᴇʀɴᴀᴍᴇ: {username}\n"
+    "👥 𝐆ʀᴏᴜᴘ: {group}\n"
+    "👨‍👩‍👧‍👦 𝐌ᴇᴍʙᴇʀs: {count}"
 )
-
-WELCOME_BUTTON_RE = re.compile(r"\[([^\]]+)\]\(buttonurl:(https?://[^)\s]+)\)", re.IGNORECASE)
-
 
 # Optional NSFW moderation. Create keys with a moderation provider and set these in Railway.
 SIGHTENGINE_USER = os.getenv("SIGHTENGINE_API_USER", "")
@@ -318,7 +319,7 @@ async def category(call: CallbackQuery):
         "lock": "<b>🔒 𝐋ᴏᴄᴋs & 𝐔ɴʟᴏᴄᴋs</b>\n/lock sticker|gif|emoji|photo|video|link\n/unlock sticker|gif|emoji|photo|video|link\n/approve <code>user_id</code>\n/free <code>user_id</code>",
         "nsfw": "<b>🔞 𝐍sғᴡ</b>\n/nsfw on|off\nAutomatic explicit-content moderation and admin alerts.",
         "filter": "<b>🏷️ 𝐅ɪʟᴛᴇʀs</b>\n/filter word → reply to media/text and save it in one command\n/filters /stopfilter word /clearfilters",
-        "welcome": "<b>👋 𝐖ᴇʟᴄᴏᴍᴇ</b>\n/setwelcome text\nExample: /setwelcome Welcome [Join Channel](buttonurl:https://t.me/yourchannel)\n/welcome on|off\n{name} {username} {mention} {id} {group} {count} {first} {last}\nAdd unlimited URL buttons using [Button Name](buttonurl:https://link)",
+        "welcome": "<b>👋 𝐖ᴇʟᴄᴏᴍᴇ</b>\n/setwelcome text (or reply to photo)\n/welcome on|off\n{name} {username} {mention} {id} {group} {count} {first} {last}",
         "purge": "<b>🧹 𝐏ᴜʀɢᴇ</b>\nReply to the first message with /purge.",
         "rank": "<b>🏆 𝐑ᴀɴᴋɪɴɢ</b>\n/rank today\n/rank week\n/rank overall\n5 messages in 1 second = 10-minute ranking block.",
         "config": "<b>⚙️ 𝐂ᴏɴғɪɢ</b>\n/config",
@@ -350,48 +351,22 @@ async def setwelcome(message: Message):
         return
 
     text = args(message).strip()
-    reply = message.reply_to_message
-    photo_id = None
-
-    # Keep the old behavior: an admin can reply to a photo and use /setwelcome text.
-    if reply and reply.photo:
-        photo_id = reply.photo[-1].file_id
-
-    # Or send a photo with /setwelcome in its caption.
-    if message.photo and message.caption:
-        parts = message.caption.split(maxsplit=1)
-        text = parts[1].strip() if len(parts) > 1 else ""
-        photo_id = message.photo[-1].file_id
-
     if not text:
         text = DEFAULT_WELCOME
 
     await groups.update_one(
         {"chat_id": message.chat.id},
-        {"$set": {
-            "welcome": text,
-            "welcome_on": True,
-            "welcome_photo": photo_id
-        }},
+        {"$set": {"welcome": text, "welcome_on": True}},
         upsert=True
     )
     await delete_safe(message)
     await message.answer(
-        "✅ <b>𝐖ᴇʟᴄᴏᴍᴇ 𝐒ᴀᴠᴇᴅ</b>\n"
-        "🖼️ 𝐖ᴇʟᴄᴏᴍᴇ 𝐂ᴀʀᴅ: 𝐔sᴇʀ 𝐃ᴘ 𝐂ɪʀᴄʟᴇ\n"
-        "🔘 𝐁ᴜᴛᴛᴏɴs: <code>[Name](buttonurl:https://link)</code>\n"
-        "💡 𝐘ᴏᴜ ᴄᴀɴ ᴀᴅᴅ ᴀs ᴍᴀɴʏ ᴡᴇʟᴄᴏᴍᴇ ʙᴜᴛᴛᴏɴs ᴀs ᴛʜᴇ ᴛᴇʟᴇɢʀᴀᴍ ᴍᴇssᴀɢᴇ ʟɪᴍɪᴛ ᴀʟʟᴏᴡs."
+        "✅ <b>𝐖ᴇʟᴄᴏᴍᴇ 𝐒ᴀᴠᴇᴅ</b>\n\n"
+        "🖼️ User DP automatically circular card me aayegi.\n"
+        "🔗 Unlimited buttons: <code>[Join](buttonurl:https://t.me/channel)</code>\n"
+        "📝 Variables: <code>{name} {first} {last} {username} {mention} {id} {group} {count}</code>"
     )
 
-
-@router.message(F.photo, F.caption)
-async def setwelcome_photo_caption(message: Message):
-    caption = message.caption or ""
-    if not caption.lower().startswith("/setwelcome"):
-        return
-    # This handler is kept for clients that deliver the command as a photo caption.
-    # The main /setwelcome handler above also handles the same case.
-    return
 
 
 @router.message(Command("delwelcome"))
@@ -799,7 +774,109 @@ async def get_user_dp(user_id: int):
         return None
 
 
-def parse_welcome_template(template, user, group_title, count):
+WELCOME_BUTTON_RE = re.compile(r"\[([^\]]+)\]\(buttonurl:([^\)]+)\)", re.IGNORECASE)
+
+
+def parse_welcome_buttons(template: str):
+    """Extract unlimited [Label](buttonurl:https://...) buttons from welcome text."""
+    buttons = []
+
+    def repl(match):
+        label = match.group(1).strip()
+        url = match.group(2).strip()
+        # Telegram inline URL buttons need a valid absolute URL or tg:// URL.
+        parsed = urllib.parse.urlparse(url)
+        if not label or parsed.scheme not in ("http", "https", "tg"):
+            return match.group(0)
+        buttons.append((label[:64], url))
+        return ""
+
+    clean = WELCOME_BUTTON_RE.sub(repl, template)
+    clean = re.sub(r"\n[ \t]*\n[ \t]*\n+", "\n\n", clean).strip()
+    return clean, buttons
+
+
+def _font(size, bold=False):
+    candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return ImageFont.truetype(path, size)
+    return ImageFont.load_default()
+
+
+async def download_user_avatar(user_id: int):
+    try:
+        photos = await bot.get_user_profile_photos(user_id=user_id, limit=1)
+        if not photos or not photos.photos:
+            return None
+        file_id = photos.photos[0][-1].file_id
+        data = io.BytesIO()
+        await bot.download(file_id, destination=data)
+        data.seek(0)
+        return Image.open(data).convert("RGB")
+    except Exception as e:
+        print("User DP download error:", e)
+        return None
+
+
+def make_welcome_card(user, group_title, avatar):
+    """Create a neon welcome card with a circular user DP and member details."""
+    W, H = 1280, 720
+    img = Image.new("RGB", (W, H), (18, 12, 27))
+    px = img.load()
+    # Smooth dark magenta/teal background.
+    for y in range(H):
+        for x in range(W):
+            glow = max(0, 1 - (((x - 310) / 560) ** 2 + ((y - 360) / 520) ** 2))
+            pink = int(42 + 105 * glow)
+            blue = int(30 + 72 * glow)
+            px[x, y] = (pink, 16 + int(20 * glow), blue)
+
+    draw = ImageDraw.Draw(img, "RGBA")
+    # Right dark panel.
+    draw.rounded_rectangle((690, 0, W, H), radius=0, fill=(8, 10, 17, 205))
+    # Neon divider and decorative lines.
+    for off, alpha in [(0, 235), (7, 80), (-7, 80)]:
+        draw.line((700, 230 + off, 1245, 230 + off), fill=(255, 25, 220, alpha), width=4)
+        draw.line((700, 455 + off, 1170, 455 + off), fill=(255, 25, 220, alpha), width=4)
+    draw.text((735, 58), "Let's Enjoy", font=_font(72), fill=(255, 85, 230, 255))
+    draw.text((735, 270), "STATUS: MEMBER", font=_font(40, True), fill=(245, 245, 250, 255))
+    name = (user.full_name or "User")[:24]
+    draw.text((735, 340), f"NAME : {name}", font=_font(34, True), fill=(245, 245, 250, 255))
+    draw.text((735, 400), f"ID: {user.id}", font=_font(34, True), fill=(245, 245, 250, 255))
+    draw.rounded_rectangle((845, 545, 1175, 650), radius=24, outline=(255, 30, 220, 255), width=7, fill=(8, 20, 20, 150))
+    draw.text((920, 572), "Welcome", font=_font(42, True), fill=(255, 210, 250, 255))
+
+    # Circular DP with neon rings.
+    cx, cy, r = 350, 360, 245
+    for width, fill in [(18, (255, 30, 220, 180)), (10, (60, 220, 255, 220)), (5, (255, 245, 255, 255))]:
+        draw.ellipse((cx-r-width, cy-r-width, cx+r+width, cy+r+width), outline=fill, width=width)
+    if avatar is None:
+        avatar = Image.new("RGB", (r * 2, r * 2), (55, 45, 65))
+        ad = ImageDraw.Draw(avatar)
+        ad.text((r-35, r-35), "?", font=_font(70, True), fill=(255, 255, 255))
+    else:
+        avatar.thumbnail((r * 2, r * 2), Image.Resampling.LANCZOS)
+        canvas = Image.new("RGB", (r * 2, r * 2), (0, 0, 0))
+        x = (canvas.width - avatar.width) // 2
+        y = (canvas.height - avatar.height) // 2
+        canvas.paste(avatar, (x, y))
+        avatar = canvas
+    mask = Image.new("L", (r * 2, r * 2), 0)
+    ImageDraw.Draw(mask).ellipse((0, 0, r * 2, r * 2), fill=255)
+    img.paste(avatar, (cx-r, cy-r), mask)
+    draw = ImageDraw.Draw(img, "RGBA")
+    # Decorative stars.
+    for sx, sy in [(105, 90), (620, 585), (610, 105)]:
+        draw.text((sx, sy), "✦", font=_font(48, True), fill=(255, 245, 70, 255))
+    return img
+
+
+async def render_welcome(g, user, group_title, count):
+    template = g.get("welcome") or DEFAULT_WELCOME
     username = f"@{user.username}" if user.username else "—"
     values = {
         "{mention}": mention(user),
@@ -813,136 +890,7 @@ def parse_welcome_template(template, user, group_title, count):
     }
     for k, v in values.items():
         template = template.replace(k, v)
-    return template
-
-
-def extract_welcome_buttons(text):
-    buttons = []
-    def repl(match):
-        label = html.unescape(match.group(1).strip())[:64]
-        url = match.group(2).strip()
-        if label and url:
-            buttons.append((label, url))
-        return ""
-    clean = WELCOME_BUTTON_RE.sub(repl, text)
-    clean = re.sub(r"[ \t]+\n", "\n", clean)
-    clean = re.sub(r"\n{3,}", "\n\n", clean).strip()
-    return clean, buttons
-
-
-def wrap_text(draw, text, font, max_width):
-    words = text.split()
-    lines = []
-    current = ""
-    for word in words:
-        candidate = word if not current else current + " " + word
-        if draw.textbbox((0, 0), candidate, font=font)[2] <= max_width:
-            current = candidate
-        else:
-            if current:
-                lines.append(current)
-            current = word
-    if current:
-        lines.append(current)
-    return lines
-
-
-async def build_welcome_card(user, status="MEMBER"):
-    """Create the neon welcome card shown in the user's requested design."""
-    W, H = 1280, 720
-    img = Image.new("RGB", (W, H), (10, 10, 18))
-    draw = ImageDraw.Draw(img)
-
-    # Dark neon-style background.
-    for y in range(H):
-        t = y / H
-        base = int(13 + 18 * t)
-        draw.line((0, y, W, y), fill=(base, 8, int(24 + 15 * t)))
-    for x in range(0, W, 34):
-        draw.line((x, 0, x, H), fill=(26, 12, 36), width=1)
-    for y in range(0, H, 34):
-        draw.line((0, y, W, y), fill=(26, 12, 36), width=1)
-
-    # Neon glow helper.
-    def neon_line(points, color, width=6, glow=18):
-        layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-        ld = ImageDraw.Draw(layer)
-        for w, a in [(width + glow, 45), (width + 8, 80), (width, 255)]:
-            ld.line(points, fill=(*color, a), width=w, joint="curve")
-        img.paste(layer, (0, 0), layer)
-
-    pink = (255, 25, 185)
-    cyan = (45, 220, 255)
-    white = (245, 245, 255)
-    neon_line([(45, 55), (45, H-55), (680, H-55)], pink, 4)
-    neon_line([(W-50, 55), (W-50, H-55), (705, H-55)], cyan, 3)
-    neon_line([(700, 225), (W-55, 225)], pink, 5)
-    neon_line([(700, 455), (W-55, 455)], pink, 5)
-    neon_line([(700, 575), (W-120, 575)], cyan, 4)
-
-    # Left circular DP frame.
-    cx, cy, r = 335, 360, 220
-    try:
-        photos = await bot.get_user_profile_photos(user_id=user.id, limit=1)
-        if photos and photos.photos:
-            file_id = photos.photos[0][-1].file_id
-            data = await download_file_bytes(file_id)
-            avatar = Image.open(io.BytesIO(data)).convert("RGB")
-            side = min(avatar.size)
-            left = (avatar.width - side) // 2
-            top = (avatar.height - side) // 2
-            avatar = avatar.crop((left, top, left + side, top + side)).resize((r*2, r*2), Image.Resampling.LANCZOS)
-            mask = Image.new("L", (r*2, r*2), 0)
-            ImageDraw.Draw(mask).ellipse((0, 0, r*2-1, r*2-1), fill=255)
-            img.paste(avatar, (cx-r, cy-r), mask)
-    except Exception as e:
-        print("Welcome card avatar error:", e)
-        draw.ellipse((cx-r, cy-r, cx+r, cy+r), fill=(35, 25, 45))
-
-    # Bright circular rings around the DP.
-    neon_line([(cx+r*0.82, cy-r*0.72), (cx+r, cy-r*0.35), (cx+r*0.98, cy+r*0.35), (cx+r*0.70, cy+r*0.82)], pink, 8, 16)
-    neon_line([(cx-r*0.70, cy-r*0.82), (cx-r, cy-r*0.25), (cx-r*0.92, cy+r*0.50), (cx-r*0.55, cy+r*0.85)], cyan, 6, 14)
-    draw.ellipse((cx-r-5, cy-r-5, cx+r+5, cy+r+5), outline=white, width=5)
-
-    # Fonts.
-    try:
-        title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 46)
-        label_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 38)
-        value_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 36)
-        welcome_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 43)
-    except Exception:
-        title_font = label_font = value_font = welcome_font = ImageFont.load_default()
-
-    # Header and fields.
-    draw.text((760, 85), "WELCOME", font=title_font, fill=white, anchor="mm")
-    draw.text((700, 255), f"STATUS: {status}", font=label_font, fill=white)
-    name = user.full_name or "User"
-    if len(name) > 25:
-        name = name[:24] + "…"
-    draw.text((700, 330), "NAME :", font=label_font, fill=white)
-    draw.text((875, 333), name, font=value_font, fill=white)
-    draw.text((700, 395), f"ID: {user.id}", font=label_font, fill=white)
-    draw.text((760, 620), "Welcome", font=welcome_font, fill=white, anchor="mm")
-
-    # Small decorative stars.
-    for sx, sy, sc in [(100, 120, 28), (640, 125, 23), (620, 610, 32), (90, 620, 18)]:
-        pts = []
-        for i in range(10):
-            a = -math.pi/2 + i*math.pi/5
-            rr = sc if i % 2 == 0 else sc*0.42
-            pts.append((sx + math.cos(a)*rr, sy + math.sin(a)*rr))
-        draw.polygon(pts, outline=pink if sx < 500 else cyan, width=4)
-
-    out = io.BytesIO()
-    img.save(out, format="JPEG", quality=94, optimize=True)
-    return out.getvalue()
-
-
-async def render_welcome(g, user, group_title, count):
-    template = g.get("welcome") or DEFAULT_WELCOME
-    template = parse_welcome_template(template, user, group_title, count)
-    clean_text, button_defs = extract_welcome_buttons(template)
-    return clean_text, button_defs
+    return parse_welcome_buttons(template)
 
 
 async def send_welcome_for_user(chat_id: int, user, group_title: str, g=None):
@@ -956,36 +904,40 @@ async def send_welcome_for_user(chat_id: int, user, group_title: str, g=None):
     if g is None:
         g = await groups.find_one_and_update(
             {"chat_id": chat_id},
-            {"$setOnInsert": {"welcome": DEFAULT_WELCOME, "welcome_on": True, "welcome_photo": None, "created_at": time.time()}},
+            {"$setOnInsert": {"welcome": DEFAULT_WELCOME, "welcome_on": True, "created_at": time.time()}},
             upsert=True, return_document=True
         )
     if not g:
-        g = {"welcome": DEFAULT_WELCOME, "welcome_on": True, "welcome_photo": None}
+        g = {"welcome": DEFAULT_WELCOME, "welcome_on": True}
     if not g.get("welcome_on", True):
         return
     try:
         count = await bot.get_chat_member_count(chat_id)
     except Exception:
         count = "?"
-
-    caption, button_defs = await render_welcome(g, user, group_title, count)
-    keyboard = None
-    if button_defs:
-        # Two buttons per row, preserving the order written in /setwelcome.
-        rows = []
-        for i in range(0, min(len(button_defs), 100), 2):
-            row = [InlineKeyboardButton(text=label, url=url) for label, url in button_defs[i:i+2]]
-            rows.append(row)
-        keyboard = InlineKeyboardMarkup(inline_keyboard=rows)
-
+    caption, button_specs = await render_welcome(g, user, group_title, count)
     try:
-        # Always generate the new welcome card from the joining user's own DP.
-        card = await build_welcome_card(user, "MEMBER")
-        await bot.send_photo(chat_id, BufferedInputFile(card, filename="welcome.jpg"), caption=caption or "👋 Welcome!", reply_markup=keyboard)
+        avatar = await download_user_avatar(user.id)
+        card = make_welcome_card(user, group_title, avatar)
+        output = io.BytesIO()
+        card.save(output, format="PNG", optimize=True)
+        output.seek(0)
+        keyboard = None
+        if button_specs:
+            keyboard = InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text=label, url=url)] for label, url in button_specs]
+            )
+        # The generated card is sent first; the editable custom welcome text/buttons stay below it.
+        await bot.send_photo(
+            chat_id,
+            BufferedInputFile(output.read(), filename="welcome.png"),
+            caption=caption or None,
+            reply_markup=keyboard,
+        )
     except Exception as e:
-        print("Welcome send error:", e)
+        print("Welcome card send error:", e)
         try:
-            await bot.send_message(chat_id, caption or "👋 Welcome!", reply_markup=keyboard)
+            await bot.send_message(chat_id, caption or "👋 Welcome!", reply_markup=keyboard if 'keyboard' in locals() else None)
         except Exception:
             pass
 
@@ -1231,7 +1183,6 @@ async def moderation_and_count(message: Message):
         {"$setOnInsert": {
             "welcome": DEFAULT_WELCOME,
             "welcome_on": True,
-            "welcome_photo": None,
             "created_at": time.time()
         }},
         upsert=True
